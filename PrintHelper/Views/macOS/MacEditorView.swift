@@ -14,27 +14,15 @@ struct MacEditorView: View {
 
     var body: some View {
         ScrollView([.vertical, .horizontal]) {
-            VStack(spacing: 20) {
-                ForEach(Array(model.pages.enumerated()), id: \.offset) { idx, entries in
-                    VStack(spacing: 6) {
-                        MacPageCanvas(
-                            model: model,
-                            pageIndex: idx,
-                            entries: entries,
-                            zoom: zoom,
-                            onCutRequest: { id in
-                                model.selectedID = id
-                                showCut = true
-                            }
-                        )
-                        Text("第 \(idx + 1) 页")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            MacDocumentCanvas(
+                model: model,
+                zoom: zoom,
+                onCutRequest: { id in
+                    model.selectedID = id
+                    showCut = true
                 }
-            }
+            )
             .padding(28)
-            .frame(minWidth: A4.width * zoom + 56)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .dropDestination(for: URL.self) { urls, _ in
@@ -179,40 +167,67 @@ struct MacEditorView: View {
     }
 }
 
-/// 单页画布：白纸 + 可交互图片
-struct MacPageCanvas: View {
+/// 整篇统一画布：所有页面 + 所有图片在同一坐标系，
+/// 拖拽可实时跨页（修复：无法从第 2 页拖回第 1 页）
+struct MacDocumentCanvas: View {
     let model: EditorModel
-    let pageIndex: Int
-    let entries: [LayoutEngine.Entry]
     let zoom: CGFloat
     let onCutRequest: (UUID) -> Void
 
+    /// 页间距（含页码标签区域）
+    static let pageGap: CGFloat = 44
+    var stride: CGFloat { A4.height * zoom + Self.pageGap }
+
     var body: some View {
+        let pageCount = model.pages.count
         ZStack(alignment: .topLeading) {
-            Rectangle().fill(.white)
-            ForEach(entries, id: \.item.id) { entry in
+            ForEach(0..<pageCount, id: \.self) { idx in
+                VStack(spacing: 6) {
+                    Rectangle()
+                        .fill(.white)
+                        .frame(width: A4.width * zoom, height: A4.height * zoom)
+                        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.selectedID = nil }
+                    Text("第 \(idx + 1) 页")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .offset(y: CGFloat(idx) * stride)
+            }
+            ForEach(model.doc.items) { item in
+                let size = model.doc.size(of: item)
+                let gf = CGRect(
+                    x: item.origin.x * zoom,
+                    y: CGFloat(item.pageIndex) * stride + item.origin.y * zoom,
+                    width: size.width * zoom,
+                    height: size.height * zoom
+                )
                 MacItemView(
                     model: model,
-                    item: entry.item,
-                    frame: entry.frame,
+                    item: item,
+                    globalFrame: gf,
                     zoom: zoom,
+                    stride: stride,
                     onCutRequest: onCutRequest
                 )
             }
         }
-        .frame(width: A4.width * zoom, height: A4.height * zoom)
-        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-        .contentShape(Rectangle())
-        .onTapGesture { model.selectedID = nil }
+        .frame(
+            width: A4.width * zoom,
+            height: CGFloat(pageCount - 1) * stride + A4.height * zoom + 24,
+            alignment: .topLeading
+        )
     }
 }
 
-/// 可拖动 / 可缩放的图片对象
+/// 可拖动 / 可缩放的图片对象（全局坐标，拖拽时实时跨页）
 struct MacItemView: View {
     let model: EditorModel
     let item: ImageItem
-    let frame: CGRect
+    let globalFrame: CGRect
     let zoom: CGFloat
+    let stride: CGFloat
     let onCutRequest: (UUID) -> Void
 
     @State private var dragStart: CGPoint?
@@ -221,15 +236,15 @@ struct MacItemView: View {
     private var isSelected: Bool { model.selectedID == item.id }
 
     var body: some View {
-        let w = frame.width * zoom
-        let h = frame.height * zoom
+        let w = globalFrame.width
+        let h = globalFrame.height
         ZStack(alignment: .bottomTrailing) {
             imageView(w: w, h: h)
             if isSelected {
                 resizeHandle
             }
         }
-        .offset(x: frame.minX * zoom, y: frame.minY * zoom)
+        .offset(x: globalFrame.minX, y: globalFrame.minY)
     }
 
     @ViewBuilder
@@ -256,15 +271,17 @@ struct MacItemView: View {
         DragGesture(minimumDistance: 2)
             .onChanged { v in
                 if dragStart == nil {
-                    dragStart = item.origin
+                    dragStart = globalFrame.origin
                     model.beginChange()
                     model.selectedID = item.id
                 }
-                let start = dragStart ?? item.origin
-                model.setOrigin(item.id, to: CGPoint(
-                    x: start.x + v.translation.width / zoom,
-                    y: start.y + v.translation.height / zoom
-                ))
+                let start = dragStart ?? globalFrame.origin
+                let gx = start.x + v.translation.width
+                let gy = start.y + v.translation.height
+                // 根据全局 y 实时判定所在页；允许拖出最后一页（松手时自动扩页）
+                let page = min(max(Int(gy / stride), 0), model.doc.pageCount)
+                let localY = gy - CGFloat(page) * stride
+                model.setPlacement(item.id, page: page, origin: CGPoint(x: gx / zoom, y: localY / zoom))
             }
             .onEnded { _ in
                 dragStart = nil

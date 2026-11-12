@@ -117,6 +117,23 @@ await MainActor.run {
     check(rm.doc.assets.count == 1, "删除后无孤儿图片资源")
     rm.undo()
     check(rm.doc.items.count == 3, "撤销批量删除")
+
+    // ---- 9. 回归：free 模式跨页向上拖回（bug：第 2 页拖不回第 1 页）----
+    let pm = EditorModel(layoutMode: .free)
+    pm.importImages(datas: [
+        makeImage(w: 600, h: 400, r: 1, g: 0, b: 0),
+        makeImage(w: 600, h: 400, r: 0, g: 0, b: 1),
+    ])
+    let pid = pm.doc.items[1].id
+    pm.beginChange()
+    pm.setPlacement(pid, page: 1, origin: CGPoint(x: s.margin, y: s.margin))
+    pm.finishFreeEdit()
+    check(pm.doc.item(pid)?.pageIndex == 1 && pm.doc.pageCount == 2, "拖到第 2 页")
+    pm.beginChange()
+    pm.setPlacement(pid, page: 0, origin: CGPoint(x: s.margin, y: s.margin + 100))
+    pm.finishFreeEdit()
+    check(pm.doc.item(pid)?.pageIndex == 0, "从第 2 页拖回第 1 页（实际页 \((pm.doc.item(pid)?.pageIndex ?? -1) + 1)）")
+    check(pm.doc.item(pid)?.origin.y == s.margin + 100, "拖回后保持放置位置")
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")

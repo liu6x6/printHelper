@@ -132,6 +132,14 @@ final class EditorModel {
         mutate(id) { $0.origin = point }
     }
 
+    /// 拖拽中跨页移动：同时更新所在页与页内位置
+    func setPlacement(_ id: UUID, page: Int, origin: CGPoint) {
+        mutate(id) {
+            $0.pageIndex = max(0, page)
+            $0.origin = origin
+        }
+    }
+
     func setFraction(_ id: UUID, _ fraction: CGFloat) {
         mutate(id) { $0.widthFraction = min(max(fraction, ImageItem.minFraction), 1) }
     }
