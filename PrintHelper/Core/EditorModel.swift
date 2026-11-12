@@ -236,6 +236,19 @@ final class EditorModel {
         selectedID = firstItem.id
     }
 
+    // MARK: - 工程保存 / 打开（S-1）
+
+    func saveProject() throws -> FileWrapper {
+        try ProjectFile.archive(doc)
+    }
+
+    func openProject(_ wrapper: FileWrapper) throws {
+        let newDoc = try ProjectFile.load(wrapper)
+        beginChange()
+        doc = newDoc
+        selectedID = nil
+    }
+
     // MARK: - 导出（X-1...X-5）
 
     func exportPDF() -> Data? { PDFRenderer.pdfData(for: doc) }

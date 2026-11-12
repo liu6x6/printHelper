@@ -11,6 +11,9 @@ struct MacEditorView: View {
     @State private var showExporter = false
     @State private var showCut = false
     @State private var exportDoc = PDFExportDocument(data: Data())
+    @State private var showProjectImporter = false
+    @State private var showProjectExporter = false
+    @State private var projectDoc = ProjectDocument(wrapper: FileWrapper(directoryWithFileWrappers: [:]))
 
     var body: some View {
         ScrollView([.vertical, .horizontal]) {
@@ -53,6 +56,25 @@ struct MacEditorView: View {
             contentType: .pdf,
             defaultFilename: "作业"
         ) { _ in }
+        .fileImporter(
+            isPresented: $showProjectImporter,
+            allowedContentTypes: [.phDocument],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                if let wrapper = try? FileWrapper(url: url, options: .immediate) {
+                    try? model.openProject(wrapper)
+                }
+            }
+        }
+        .fileExporter(
+            isPresented: $showProjectExporter,
+            document: projectDoc,
+            contentType: .phDocument,
+            defaultFilename: "作业"
+        ) { _ in }
         .sheet(isPresented: $showCut) {
             if let item = model.selectedItem, let asset = model.doc.asset(for: item) {
                 CutSheetView(asset: asset) { f, dir in
@@ -62,18 +84,36 @@ struct MacEditorView: View {
         }
         .onDeleteCommand { model.deleteSelected() }
         .focusedSceneValue(\.exportPDFAction, model.doc.items.isEmpty ? nil : exportPDF)
+        .focusedSceneValue(\.saveProjectAction, saveProject)
+        .focusedSceneValue(\.openProjectAction, { showProjectImporter = true })
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
             Button {
+                showProjectImporter = true
+            } label: {
+                Label("打开工程", systemImage: "folder")
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .help("打开 .phdoc 工程文件（⌘O）")
+
+            Button(action: saveProject) {
+                Label("保存工程", systemImage: "tray.and.arrow.down")
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .help("保存可编辑工程（⌘S）")
+
+            Divider()
+
+            Button {
                 showImporter = true
             } label: {
                 Label("导入图片", systemImage: "photo.badge.plus")
             }
-            .keyboardShortcut("o", modifiers: .command)
-            .help("导入图片（⌘O），也可直接拖入文件")
+            .keyboardShortcut("i", modifiers: [.command, .shift])
+            .help("导入图片（⇧⌘I），也可直接拖入文件")
 
             Button(action: pasteFromClipboard) {
                 Label("粘贴", systemImage: "doc.on.clipboard")
@@ -149,6 +189,12 @@ struct MacEditorView: View {
         guard let data = model.exportPDF() else { return }
         exportDoc = PDFExportDocument(data: data)
         showExporter = true
+    }
+
+    private func saveProject() {
+        guard let wrapper = try? model.saveProject() else { return }
+        projectDoc = ProjectDocument(wrapper: wrapper)
+        showProjectExporter = true
     }
 
     private func pasteFromClipboard() {

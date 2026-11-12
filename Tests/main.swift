@@ -227,6 +227,35 @@ await MainActor.run {
     } else {
         check(false, "PDF 方向测试导出失败")
     }
+
+    // ---- 12. 工程保存/打开往返（S-1）----
+    let sm = EditorModel(layoutMode: .free)
+    sm.importImages(datas: [
+        makeImage(w: 600, h: 400, r: 1, g: 0, b: 0),
+        makeImage(w: 400, h: 800, r: 0, g: 1, b: 0),
+    ])
+    let sid = sm.doc.items[0].id
+    sm.cut(itemID: sid, atFraction: 0.3)
+    sm.setFraction(sm.doc.items[1].id, 0.6)
+    do {
+        let wrapper = try sm.saveProject()
+        let loaded = try EditorModel(layoutMode: .free)
+        try loaded.openProject(wrapper)
+        check(loaded.doc.items.count == sm.doc.items.count, "工程往返：图片数量一致")
+        check(loaded.doc.pageCount == sm.doc.pageCount, "工程往返：页数一致")
+        let sameFrames = zip(loaded.doc.items, sm.doc.items).allSatisfy { a, b in
+            a.widthFraction == b.widthFraction && a.pageIndex == b.pageIndex && a.origin == b.origin
+        }
+        check(sameFrames, "工程往返：位置/缩放/页码一致")
+        let samePixels = zip(loaded.doc.items, sm.doc.items).allSatisfy { a, b in
+            loaded.doc.assets[a.assetID]?.pixelSize == sm.doc.assets[b.assetID]?.pixelSize
+        }
+        check(samePixels, "工程往返：图片像素一致（含切割结果）")
+        loaded.undo()
+        check(loaded.doc.items.isEmpty, "打开工程可撤销")
+    } catch {
+        check(false, "工程保存/打开抛错：\(error)")
+    }
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")

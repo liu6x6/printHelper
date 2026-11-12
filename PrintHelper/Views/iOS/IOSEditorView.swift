@@ -12,6 +12,9 @@ struct IOSEditorView: View {
     @State private var shareItems: [Any] = []
     @State private var showShare = false
     @State private var isImporting = false
+    @State private var showProjectImporter = false
+    @State private var showProjectExporter = false
+    @State private var projectDoc = ProjectDocument(wrapper: FileWrapper(directoryWithFileWrappers: [:]))
 
     var body: some View {
         NavigationStack {
@@ -59,6 +62,25 @@ struct IOSEditorView: View {
             .sheet(isPresented: $showShare) {
                 ActivityShareSheet(items: shareItems)
             }
+            .fileImporter(
+                isPresented: $showProjectImporter,
+                allowedContentTypes: [.phDocument],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    if let wrapper = try? FileWrapper(url: url, options: .immediate) {
+                        try? model.openProject(wrapper)
+                    }
+                }
+            }
+            .fileExporter(
+                isPresented: $showProjectExporter,
+                document: projectDoc,
+                contentType: .phDocument,
+                defaultFilename: "作业"
+            ) { _ in }
             .overlay {
                 if isImporting {
                     ProgressView("正在导入…")
@@ -209,11 +231,30 @@ struct IOSEditorView: View {
                 } label: {
                     Label("导出每页图片", systemImage: "photo")
                 }
+                Divider()
+                Button {
+                    saveProject()
+                } label: {
+                    Label("保存工程", systemImage: "tray.and.arrow.down")
+                }
+                Button {
+                    showProjectImporter = true
+                } label: {
+                    Label("打开工程", systemImage: "folder")
+                }
             } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .disabled(model.doc.items.isEmpty)
         }
+    }
+
+    // MARK: - 工程保存
+
+    private func saveProject() {
+        guard let wrapper = try? model.saveProject() else { return }
+        projectDoc = ProjectDocument(wrapper: wrapper)
+        showProjectExporter = true
     }
 
     // MARK: - 导出分享
