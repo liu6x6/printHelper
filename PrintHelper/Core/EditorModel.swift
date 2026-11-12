@@ -1,0 +1,229 @@
+import Foundation
+import CoreGraphics
+import Observation
+
+/// 编辑器状态与全部编辑动作（双平台共用，不依赖 SwiftUI/UIKit/AppKit）。
+/// 撤销/重做：整文档值快照（图片资源为引用共享，快照成本极低），覆盖切割（Q7）。
+@MainActor
+@Observable
+final class EditorModel {
+    private(set) var doc: PrintDocument
+    var selectedID: UUID?
+
+    private var undoStack: [PrintDocument] = []
+    private var redoStack: [PrintDocument] = []
+    private let undoLimit = 100
+
+    init(layoutMode: LayoutMode) {
+        doc = PrintDocument(layoutMode: layoutMode)
+    }
+
+    var pages: [[LayoutEngine.Entry]] { LayoutEngine.pages(of: doc) }
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+    var selectedItem: ImageItem? {
+        guard let id = selectedID else { return nil }
+        return doc.item(id)
+    }
+
+    // MARK: - 撤销 / 重做（P-6）
+
+    /// 在一次编辑动作开始前调用（拖拽手势开始时调用一次即可）
+    func beginChange() {
+        undoStack.append(doc)
+        if undoStack.count > undoLimit { undoStack.removeFirst() }
+        redoStack.removeAll()
+    }
+
+    func undo() {
+        guard let prev = undoStack.popLast() else { return }
+        redoStack.append(doc)
+        doc = prev
+        fixSelection()
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(doc)
+        doc = next
+        fixSelection()
+    }
+
+    private func fixSelection() {
+        if let id = selectedID, doc.item(id) == nil { selectedID = nil }
+    }
+
+    // MARK: - 导入（I-1...I-6, F-4）
+
+    func importImages(datas: [Data]) {
+        var staged: [ImageItem] = []
+        var stagedAssets: [UUID: ImageAsset] = [:]
+        for data in datas where !data.isEmpty {
+            staged.append(contentsOf: makeImportItems(data: data, into: &stagedAssets))
+        }
+        guard !staged.isEmpty else { return }
+        beginChange()
+        doc.assets.merge(stagedAssets) { _, new in new }
+
+        switch doc.layoutMode {
+        case .flow:
+            doc.items.append(contentsOf: staged)
+        case .free:
+            let s = doc.settings
+            var (page, y) = freeInsertionPoint()
+            for var item in staged {
+                let size = doc.size(of: item)
+                if y + size.height > s.margin + s.usableHeight + LayoutEngine.epsilon,
+                   y > s.margin + LayoutEngine.epsilon {
+                    page += 1
+                    y = s.margin
+                }
+                item.pageIndex = page
+                item.origin = CGPoint(x: s.margin, y: y)
+                doc.items.append(item)
+                y += size.height + 8
+            }
+            LayoutEngine.normalizeFree(&doc)
+        }
+        selectedID = staged.last?.id
+    }
+
+    /// 生成导入项：默认铺满页宽（Q2-A）；超高图片自动按页边界切分（Q3a-C）
+    private func makeImportItems(data: Data, into assets: inout [UUID: ImageAsset]) -> [ImageItem] {
+        let asset = ImageAsset(data: data)
+        guard asset.cgImage != nil else { return [] }
+        let s = doc.settings
+        let fullHeight = s.usableWidth * asset.aspectRatio
+
+        if fullHeight <= s.usableHeight + LayoutEngine.epsilon {
+            assets[asset.id] = asset
+            return [ImageItem(assetID: asset.id)]
+        }
+
+        let count = max(2, Int(ceil(fullHeight / s.usableHeight)))
+        let frac = s.usableHeight / fullHeight
+        var fractions = Array(repeating: frac, count: count - 1)
+        fractions.append(1 - frac * CGFloat(count - 1))
+        if let parts = ImageCutter.split(asset: asset, heightFractions: fractions), parts.count == count {
+            return parts.map { a in
+                assets[a.id] = a
+                return ImageItem(assetID: a.id)
+            }
+        }
+        assets[asset.id] = asset
+        return [ImageItem(assetID: asset.id)]
+    }
+
+    /// free 模式导入起点：最后一页已有内容的最下方
+    private func freeInsertionPoint() -> (page: Int, y: CGFloat) {
+        let s = doc.settings
+        let lastPage = doc.pageCount - 1
+        let maxY = doc.items
+            .filter { $0.pageIndex == lastPage }
+            .map { doc.frame(of: $0).maxY }
+            .max() ?? s.margin
+        return (lastPage, maxY > s.margin + LayoutEngine.epsilon ? maxY + 8 : s.margin)
+    }
+
+    // MARK: - 编辑（E-1...E-9）
+
+    /// 拖拽中实时更新位置（不做规范化，手势结束时调用 finishFreeEdit）
+    func setOrigin(_ id: UUID, to point: CGPoint) {
+        mutate(id) { $0.origin = point }
+    }
+
+    func setFraction(_ id: UUID, _ fraction: CGFloat) {
+        mutate(id) { $0.widthFraction = min(max(fraction, ImageItem.minFraction), 1) }
+    }
+
+    func finishFreeEdit() {
+        if doc.layoutMode == .free {
+            LayoutEngine.normalizeFree(&doc)
+        }
+    }
+
+    func deleteSelected() {
+        if let id = selectedID { delete(itemID: id) }
+    }
+
+    func delete(itemID: UUID) {
+        guard let idx = doc.items.firstIndex(where: { $0.id == itemID }) else { return }
+        beginChange()
+        doc.items.remove(at: idx)
+        cleanupAssets()
+        if doc.layoutMode == .free { LayoutEngine.normalizeFree(&doc) }
+        if selectedID == itemID { selectedID = nil }
+    }
+
+    func delete(at offsets: IndexSet) {
+        guard !offsets.isEmpty else { return }
+        beginChange()
+        for i in offsets.sorted(by: >) where i < doc.items.count {
+            doc.items.remove(at: i)
+        }
+        cleanupAssets()
+        fixSelection()
+    }
+
+    func reorder(from offsets: IndexSet, to destination: Int) {
+        guard !offsets.isEmpty else { return }
+        beginChange()
+        let moving = offsets.sorted().map { doc.items[$0] }
+        for i in offsets.sorted(by: >) { doc.items.remove(at: i) }
+        var dest = destination
+        for i in offsets where i < destination { dest -= 1 }
+        dest = min(max(dest, 0), doc.items.count)
+        doc.items.insert(contentsOf: moving, at: dest)
+    }
+
+    // MARK: - 切割（C-1...C-5）
+
+    func cut(itemID: UUID, atFraction f: CGFloat) {
+        guard let idx = doc.items.firstIndex(where: { $0.id == itemID }),
+              let asset = doc.assets[doc.items[idx].assetID],
+              let parts = ImageCutter.cut(asset: asset, atYFraction: f) else { return }
+        beginChange()
+        let item = doc.items[idx]
+        doc.assets[parts.top.id] = parts.top
+        doc.assets[parts.bottom.id] = parts.bottom
+
+        var topItem = item
+        topItem.assetID = parts.top.id
+        var bottomItem = ImageItem(assetID: parts.bottom.id)
+        bottomItem.widthFraction = item.widthFraction
+
+        doc.items[idx] = topItem
+        switch doc.layoutMode {
+        case .flow:
+            doc.items.insert(bottomItem, at: idx + 1)
+        case .free:
+            let topH = doc.size(of: topItem).height
+            bottomItem.pageIndex = item.pageIndex
+            bottomItem.origin = CGPoint(x: item.origin.x, y: item.origin.y + topH + 4)
+            doc.items.insert(bottomItem, at: idx + 1)
+            LayoutEngine.normalizeFree(&doc)
+        }
+        cleanupAssets()
+        selectedID = topItem.id
+    }
+
+    // MARK: - 导出（X-1...X-5）
+
+    func exportPDF() -> Data? { PDFRenderer.pdfData(for: doc) }
+
+    func exportPagePNGs() -> [Data] {
+        (0..<pages.count).compactMap { PDFRenderer.pagePNG(doc: doc, pageIndex: $0) }
+    }
+
+    // MARK: - Private
+
+    private func mutate(_ id: UUID, _ body: (inout ImageItem) -> Void) {
+        guard let idx = doc.items.firstIndex(where: { $0.id == id }) else { return }
+        body(&doc.items[idx])
+    }
+
+    private func cleanupAssets() {
+        let used = Set(doc.items.map(\.assetID))
+        doc.assets = doc.assets.filter { used.contains($0.key) }
+    }
+}
