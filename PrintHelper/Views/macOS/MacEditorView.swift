@@ -1,6 +1,7 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import PDFKit
 import UniformTypeIdentifiers
 
 /// macOS 主编辑器：Word 式连续页面 + 自由摆放（M1）
@@ -216,8 +217,11 @@ struct MacEditorView: View {
     }
 
     private func printDocument() {
-        guard let data = model.exportPDF() else { return }
-        let op = NSPrintOperation(pdfData: data, printInfo: NSPrintInfo.shared)
+        guard let data = model.exportPDF(), let document = PDFDocument(data: data) else { return }
+        let pdfView = PDFView(frame: NSRect(x: 0, y: 0, width: A4.width, height: A4.height))
+        pdfView.document = document
+        pdfView.autoScales = true
+        let op = NSPrintOperation(view: pdfView, printInfo: .shared)
         op.run()
     }
 
