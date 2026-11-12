@@ -295,6 +295,33 @@ await MainActor.run {
     em.splitEqual(itemID: em.doc.items[0].id, parts: 4, direction: .vertical)
     check(em.doc.items.count == 4, "模型纵 4 等分 → 4 段")
     check(em.doc.items.allSatisfy { abs($0.widthFraction - 0.25) < 0.001 }, "纵等分保持视觉比例 25%")
+
+    // ---- 15. 长图导出（X-3）----
+    let lm = EditorModel(layoutMode: .flow)
+    lm.importImages(datas: [
+        makeBicolorImage(w: 200, h: 200),
+        makeImage(w: 200, h: 200, r: 0, g: 1, b: 0),
+        makeImage(w: 200, h: 200, r: 0, g: 1, b: 0),
+        makeImage(w: 200, h: 200, r: 0, g: 1, b: 0),
+    ])
+    let pageCount = lm.pages.count
+    check(pageCount >= 2, "长图测试文档 ≥ 2 页（实际 \(pageCount)）")
+    if let long = lm.exportLongImagePNG(),
+       let src = CGImageSourceCreateWithData(long as CFData, nil),
+       let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+        let sc = 150.0 / 72.0
+        let expectW = Int(A4.width * sc)
+        let expectH = Int(A4.height * sc) * pageCount
+        check(cg.width == expectW && cg.height == expectH, "长图尺寸 = \(pageCount) 页拼接（实际 \(cg.width)x\(cg.height)）")
+        if let buf = topDownPixels(cg) {
+            let ps2 = PageSettings()
+            let cx = Int((ps2.margin + ps2.usableWidth / 2) * sc)
+            let yTop = Int((ps2.margin + 40) * sc)
+            check(isRed(buf, cg.width, cx, yTop), "长图第一页方向正立")
+        }
+    } else {
+        check(false, "长图导出失败")
+    }
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")

@@ -267,6 +267,17 @@ struct IOSEditorView: View {
                 } label: {
                     Label("导出每页图片", systemImage: "photo")
                 }
+                Button {
+                    shareLongImage()
+                } label: {
+                    Label("导出长图", systemImage: "photo.on.rectangle")
+                }
+                Divider()
+                Button {
+                    printPDF()
+                } label: {
+                    Label("打印", systemImage: "printer")
+                }
                 Divider()
                 Button {
                     saveProject()
@@ -317,6 +328,23 @@ struct IOSEditorView: View {
         guard !urls.isEmpty else { return }
         shareItems = urls
         showShare = true
+    }
+
+    private func shareLongImage() {
+        guard let data = model.exportLongImagePNG() else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("作业-长图.png")
+        do {
+            try data.write(to: url, options: .atomic)
+            shareItems = [url]
+            showShare = true
+        } catch {}
+    }
+
+    private func printPDF() {
+        guard let data = model.exportPDF() else { return }
+        let controller = UIPrintInteractionController.shared
+        controller.printingItem = data
+        controller.present(animated: true)
     }
 }
 

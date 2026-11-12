@@ -199,6 +199,13 @@ struct MacEditorView: View {
 
             Divider()
 
+            Button(action: printDocument) {
+                Label("打印", systemImage: "printer")
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(model.doc.items.isEmpty)
+            .help("直接打印（⌘P）")
+
             Button(action: exportPDF) {
                 Label("导出 PDF", systemImage: "square.and.arrow.down")
             }
@@ -206,6 +213,12 @@ struct MacEditorView: View {
             .disabled(model.doc.items.isEmpty)
             .help("导出标准 A4 PDF（⌘E，也可用文件菜单）")
         }
+    }
+
+    private func printDocument() {
+        guard let data = model.exportPDF() else { return }
+        let op = NSPrintOperation(pdfData: data, printInfo: NSPrintInfo.shared)
+        op.run()
     }
 
     private func exportPDF() {

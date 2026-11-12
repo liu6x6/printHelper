@@ -310,6 +310,10 @@ final class EditorModel {
         (0..<pages.count).compactMap { PDFRenderer.pagePNG(doc: doc, pageIndex: $0) }
     }
 
+    func exportLongImagePNG() -> Data? {
+        PDFRenderer.longImagePNG(doc: doc)
+    }
+
     // MARK: - Private
 
     private func mutate(_ id: UUID, _ body: (inout ImageItem) -> Void) {

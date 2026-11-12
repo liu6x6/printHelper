@@ -52,6 +52,36 @@ enum PDFRenderer {
         return ImageCutter.pngData(img)
     }
 
+    // MARK: - 长图导出（X-3）
+
+    /// 所有页纵向拼接为一张长图（默认 150 DPI，控制内存）
+    static func longImagePNG(doc: PrintDocument, dpi: CGFloat = 150) -> Data? {
+        let pages = LayoutEngine.pages(of: doc)
+        guard !pages.isEmpty else { return nil }
+        let scale = dpi / 72
+        let w = Int(A4.width * scale)
+        let pageH = Int(A4.height * scale)
+        let totalH = pageH * pages.count
+        guard totalH <= 32767 else { return nil }
+        guard let ctx = CGContext(
+            data: nil, width: w, height: totalH,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        for (i, entries) in pages.enumerated() {
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: CGFloat(pages.count - 1 - i) * A4.height)
+            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: A4.width, height: A4.height))
+            draw(entries: entries, of: doc, in: ctx)
+            ctx.restoreGState()
+        }
+        guard let img = ctx.makeImage() else { return nil }
+        return ImageCutter.pngData(img)
+    }
+
     // MARK: - 绘制
 
     /// 绘制一页的所有图片。
