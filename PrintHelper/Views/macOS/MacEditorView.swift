@@ -187,6 +187,16 @@ struct MacEditorView: View {
                 Image(systemName: "plus.magnifyingglass")
             }
 
+            if let sel = model.selectedItem {
+                Divider()
+                TextField("宽度%", value: percentBinding(sel.id), format: .number)
+                    .frame(width: 56)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .help("精确设置选中图片宽度比例（回车生效）")
+                Text("%")
+            }
+
             Divider()
 
             Button(action: exportPDF) {
@@ -210,6 +220,17 @@ struct MacEditorView: View {
         showProjectExporter = true
     }
 
+    private func percentBinding(_ id: UUID) -> Binding<Double> {
+        Binding(
+            get: { Double((model.doc.item(id)?.widthFraction ?? 1) * 100) },
+            set: { newValue in
+                model.beginChange()
+                model.setFraction(id, CGFloat(newValue / 100))
+                model.finishFreeEdit()
+            }
+        )
+    }
+
     private func pasteFromClipboard() {
         let pb = NSPasteboard.general
         var datas: [Data] = []
@@ -230,12 +251,21 @@ struct MacEditorView: View {
     }
 }
 
+/// 对齐吸附参考线（E-5）
+struct SnapGuide: Identifiable {
+    let id = UUID()
+    let isVertical: Bool
+    let position: CGFloat  // 画布视图坐标
+}
+
 /// 整篇统一画布：所有页面 + 所有图片在同一坐标系，
 /// 拖拽可实时跨页（修复：无法从第 2 页拖回第 1 页）
 struct MacDocumentCanvas: View {
     let model: EditorModel
     let zoom: CGFloat
     let onCutRequest: (UUID) -> Void
+
+    @State private var guides: [SnapGuide] = []
 
     /// 页间距（含页码标签区域）
     static let pageGap: CGFloat = 44
@@ -272,8 +302,17 @@ struct MacDocumentCanvas: View {
                     globalFrame: gf,
                     zoom: zoom,
                     stride: stride,
-                    onCutRequest: onCutRequest
+                    onCutRequest: onCutRequest,
+                    onGuides: { guides = $0 }
                 )
+            }
+            ForEach(guides) { g in
+                Rectangle()
+                    .fill(Color.pink.opacity(0.9))
+                    .frame(width: g.isVertical ? 1 : A4.width * zoom,
+                           height: g.isVertical ? CGFloat(pageCount) * stride : 1)
+                    .offset(x: g.isVertical ? g.position : 0, y: g.isVertical ? 0 : g.position)
+                    .allowsHitTesting(false)
             }
         }
         .frame(
@@ -292,6 +331,7 @@ struct MacItemView: View {
     let zoom: CGFloat
     let stride: CGFloat
     let onCutRequest: (UUID) -> Void
+    let onGuides: ([SnapGuide]) -> Void
 
     @State private var dragStart: CGPoint?
     @State private var resizeStart: CGFloat?
@@ -344,10 +384,61 @@ struct MacItemView: View {
                 // 根据全局 y 实时判定所在页；允许拖出最后一页（松手时自动扩页）
                 let page = min(max(Int(gy / stride), 0), model.doc.pageCount)
                 let localY = gy - CGFloat(page) * stride
-                model.setPlacement(item.id, page: page, origin: CGPoint(x: gx / zoom, y: localY / zoom))
+                var origin = CGPoint(x: gx / zoom, y: localY / zoom)
+
+                // 对齐吸附（E-5）：页边距/中线 + 同页其他图片边缘
+                let size = model.doc.size(of: item)
+                let s = model.doc.settings
+                let threshold = 6 / zoom
+                let others = model.doc.items
+                    .filter { $0.pageIndex == page && $0.id != item.id }
+                    .map { model.doc.frame(of: $0) }
+                var newGuides: [SnapGuide] = []
+
+                var xTargets: [CGFloat] = [s.margin, A4.width / 2, s.margin + s.usableWidth]
+                xTargets += others.flatMap { [$0.minX, $0.midX, $0.maxX] }
+                let xEdges = [origin.x, origin.x + size.width / 2, origin.x + size.width]
+                var bestDX: CGFloat?
+                var bestX: CGFloat = 0
+                for t in xTargets {
+                    for e in xEdges {
+                        let d = t - e
+                        if abs(d) < threshold, bestDX == nil || abs(d) < abs(bestDX!) {
+                            bestDX = d
+                            bestX = t
+                        }
+                    }
+                }
+                if let d = bestDX {
+                    origin.x += d
+                    newGuides.append(SnapGuide(isVertical: true, position: bestX * zoom))
+                }
+
+                var yTargets: [CGFloat] = [s.margin, s.margin + s.usableHeight]
+                yTargets += others.flatMap { [$0.minY, $0.maxY] }
+                let yEdges = [origin.y, origin.y + size.height]
+                var bestDY: CGFloat?
+                var bestY: CGFloat = 0
+                for t in yTargets {
+                    for e in yEdges {
+                        let d = t - e
+                        if abs(d) < threshold, bestDY == nil || abs(d) < abs(bestDY!) {
+                            bestDY = d
+                            bestY = t
+                        }
+                    }
+                }
+                if let d = bestDY {
+                    origin.y += d
+                    newGuides.append(SnapGuide(isVertical: false, position: CGFloat(page) * stride + bestY * zoom))
+                }
+
+                model.setPlacement(item.id, page: page, origin: origin)
+                onGuides(newGuides)
             }
             .onEnded { _ in
                 dragStart = nil
+                onGuides([])
                 model.finishFreeEdit()
             }
     }

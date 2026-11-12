@@ -15,6 +15,8 @@ struct IOSEditorView: View {
     @State private var showProjectImporter = false
     @State private var showProjectExporter = false
     @State private var projectDoc = ProjectDocument(wrapper: FileWrapper(directoryWithFileWrappers: [:]))
+    @State private var scaleTarget: ImageItem?
+    @State private var scaleText = ""
 
     var body: some View {
         NavigationStack {
@@ -86,6 +88,23 @@ struct IOSEditorView: View {
                 contentType: .phDocument,
                 defaultFilename: "作业"
             ) { _ in }
+            .alert("设置宽度比例", isPresented: Binding(
+                get: { scaleTarget != nil },
+                set: { if !$0 { scaleTarget = nil } }
+            )) {
+                TextField("0–100", text: $scaleText)
+                    .keyboardType(.numberPad)
+                Button("确定") {
+                    if let v = Double(scaleText), let t = scaleTarget {
+                        model.beginChange()
+                        model.setFraction(t.id, CGFloat(v / 100))
+                    }
+                    scaleTarget = nil
+                }
+                Button("取消", role: .cancel) { scaleTarget = nil }
+            } message: {
+                Text("相对页面可用宽度的百分比")
+            }
             .overlay {
                 if isImporting {
                     ProgressView("正在导入…")
@@ -174,10 +193,16 @@ struct IOSEditorView: View {
                         if began { model.beginChange() }
                     }
                 )
-                Text("宽度 \(Int((item.widthFraction * 100).rounded()))%")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                Button {
+                    scaleText = String(Int((item.widthFraction * 100).rounded()))
+                    scaleTarget = item
+                } label: {
+                    Text("宽度 \(Int((item.widthFraction * 100).rounded()))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .buttonStyle(.plain)
             }
             Button {
                 model.rotate(itemID: item.id)
