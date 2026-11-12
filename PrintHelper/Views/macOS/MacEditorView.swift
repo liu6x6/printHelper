@@ -55,12 +55,13 @@ struct MacEditorView: View {
         ) { _ in }
         .sheet(isPresented: $showCut) {
             if let item = model.selectedItem, let asset = model.doc.asset(for: item) {
-                CutSheetView(asset: asset) { f in
-                    model.cut(itemID: item.id, atFraction: f)
+                CutSheetView(asset: asset) { f, dir in
+                    model.cut(itemID: item.id, atFraction: f, direction: dir)
                 }
             }
         }
         .onDeleteCommand { model.deleteSelected() }
+        .focusedSceneValue(\.exportPDFAction, model.doc.items.isEmpty ? nil : exportPDF)
     }
 
     @ToolbarContentBuilder
@@ -88,7 +89,7 @@ struct MacEditorView: View {
                 Label("切割", systemImage: "scissors")
             }
             .disabled(model.selectedItem == nil)
-            .help("横向切割选中图片（也可双击图片）")
+            .help("切割选中图片：横向/纵向（也可双击图片）")
 
             Button {
                 model.deleteSelected()
@@ -96,6 +97,8 @@ struct MacEditorView: View {
                 Label("删除", systemImage: "trash")
             }
             .disabled(model.selectedItem == nil)
+            .keyboardShortcut(.delete, modifiers: [])
+            .help("删除选中图片（Delete 键）")
 
             Divider()
 
@@ -138,6 +141,7 @@ struct MacEditorView: View {
             }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(model.doc.items.isEmpty)
+            .help("导出标准 A4 PDF（⌘E，也可用文件菜单）")
         }
     }
 

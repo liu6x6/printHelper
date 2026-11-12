@@ -51,8 +51,8 @@ struct IOSEditorView: View {
             }
             .sheet(item: $cutTarget) { item in
                 if let asset = model.doc.assets[item.assetID] {
-                    CutSheetView(asset: asset) { f in
-                        model.cut(itemID: item.id, atFraction: f)
+                    CutSheetView(asset: asset) { f, dir in
+                        model.cut(itemID: item.id, atFraction: f, direction: dir)
                     }
                 }
             }

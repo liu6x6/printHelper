@@ -13,6 +13,7 @@ struct PrintHelperApp: App {
         }
         #if os(macOS)
         .defaultSize(width: 900, height: 800)
+        .commands { ExportCommands() }
         #endif
     }
 }

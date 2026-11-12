@@ -186,33 +186,54 @@ final class EditorModel {
 
     // MARK: - 切割（C-1...C-5）
 
-    func cut(itemID: UUID, atFraction f: CGFloat) {
+    func cut(itemID: UUID, atFraction f: CGFloat, direction: CutDirection = .horizontal) {
         guard let idx = doc.items.firstIndex(where: { $0.id == itemID }),
-              let asset = doc.assets[doc.items[idx].assetID],
-              let parts = ImageCutter.cut(asset: asset, atYFraction: f) else { return }
+              let asset = doc.assets[doc.items[idx].assetID] else { return }
+        let pair: (ImageAsset, ImageAsset)?
+        switch direction {
+        case .horizontal:
+            pair = ImageCutter.cut(asset: asset, atYFraction: f).map { ($0.top, $0.bottom) }
+        case .vertical:
+            pair = ImageCutter.cutVertical(asset: asset, atXFraction: f).map { ($0.left, $0.right) }
+        }
+        guard let (firstAsset, secondAsset) = pair else { return }
         beginChange()
         let item = doc.items[idx]
-        doc.assets[parts.top.id] = parts.top
-        doc.assets[parts.bottom.id] = parts.bottom
+        doc.assets[firstAsset.id] = firstAsset
+        doc.assets[secondAsset.id] = secondAsset
 
-        var topItem = item
-        topItem.assetID = parts.top.id
-        var bottomItem = ImageItem(assetID: parts.bottom.id)
-        bottomItem.widthFraction = item.widthFraction
+        var firstItem = item
+        firstItem.assetID = firstAsset.id
+        var secondItem = ImageItem(assetID: secondAsset.id)
+        switch direction {
+        case .horizontal:
+            // 宽度不变，高度按比例缩小
+            secondItem.widthFraction = item.widthFraction
+        case .vertical:
+            // 保持视觉缩放比例不变：两段宽度按切割比例分配
+            firstItem.widthFraction = max(ImageItem.minFraction, item.widthFraction * f)
+            secondItem.widthFraction = max(ImageItem.minFraction, item.widthFraction * (1 - f))
+        }
 
-        doc.items[idx] = topItem
+        doc.items[idx] = firstItem
         switch doc.layoutMode {
         case .flow:
-            doc.items.insert(bottomItem, at: idx + 1)
+            doc.items.insert(secondItem, at: idx + 1)
         case .free:
-            let topH = doc.size(of: topItem).height
-            bottomItem.pageIndex = item.pageIndex
-            bottomItem.origin = CGPoint(x: item.origin.x, y: item.origin.y + topH + 4)
-            doc.items.insert(bottomItem, at: idx + 1)
+            secondItem.pageIndex = item.pageIndex
+            switch direction {
+            case .horizontal:
+                let topH = doc.size(of: firstItem).height
+                secondItem.origin = CGPoint(x: item.origin.x, y: item.origin.y + topH + 4)
+            case .vertical:
+                let leftW = doc.size(of: firstItem).width
+                secondItem.origin = CGPoint(x: item.origin.x + leftW + 4, y: item.origin.y)
+            }
+            doc.items.insert(secondItem, at: idx + 1)
             LayoutEngine.normalizeFree(&doc)
         }
         cleanupAssets()
-        selectedID = topItem.id
+        selectedID = firstItem.id
     }
 
     // MARK: - 导出（X-1...X-5）

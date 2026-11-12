@@ -134,6 +134,25 @@ await MainActor.run {
     pm.finishFreeEdit()
     check(pm.doc.item(pid)?.pageIndex == 0, "从第 2 页拖回第 1 页（实际页 \((pm.doc.item(pid)?.pageIndex ?? -1) + 1)）")
     check(pm.doc.item(pid)?.origin.y == s.margin + 100, "拖回后保持放置位置")
+
+    // ---- 10. 纵向切割（C-7）----
+    let va = ImageAsset(data: makeImage(w: 800, h: 600, r: 0.5, g: 0.5, b: 0))
+    let vparts = ImageCutter.cutVertical(asset: va, atXFraction: 0.25)!
+    check(vparts.left.pixelSize == CGSize(width: 200, height: 600), "纵切左段 200x600（实际 \(vparts.left.pixelSize)）")
+    check(vparts.right.pixelSize == CGSize(width: 600, height: 600), "纵切右段 600x600（实际 \(vparts.right.pixelSize)）")
+
+    let vm = EditorModel(layoutMode: .free)
+    vm.importImages(datas: [makeImage(w: 800, h: 600, r: 0.5, g: 0.5, b: 0)])
+    let vid = vm.doc.items[0].id
+    let origX = vm.doc.items[0].origin.x
+    vm.cut(itemID: vid, atFraction: 0.25, direction: .vertical)
+    check(vm.doc.items.count == 2, "纵切后 2 段")
+    let left = vm.doc.item(vid)!
+    let right = vm.doc.items[1]
+    check(abs(left.widthFraction - 0.25) < 0.001 && abs(right.widthFraction - 0.75) < 0.001, "纵切保持视觉比例：25% / 75%")
+    check(right.origin.x > origX && right.origin.y == left.origin.y, "纵切右段摆在左段右侧同一行")
+    vm.undo()
+    check(vm.doc.items.count == 1, "撤销纵切")
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")

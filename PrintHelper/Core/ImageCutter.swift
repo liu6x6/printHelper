@@ -3,7 +3,13 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-/// 像素级横向切割引擎（C-1/C-5/C-8）：
+/// 切割方向
+enum CutDirection {
+    case horizontal  // 水平切割线 → 上下两段
+    case vertical    // 垂直切割线 → 左右两段
+}
+
+/// 像素级切割引擎（C-1/C-5/C-7/C-8）：
 /// 直接裁切原图像素并无损 PNG 保存，不损失分辨率。
 enum ImageCutter {
     /// 横向切一刀：yFraction ∈ (0,1)，返回（上段, 下段）
@@ -18,6 +24,20 @@ enum ImageCutter {
               let topData = pngData(topCG),
               let botData = pngData(botCG) else { return nil }
         return (ImageAsset(data: topData), ImageAsset(data: botData))
+    }
+
+    /// 纵向切一刀：xFraction ∈ (0,1)，返回（左段, 右段）
+    static func cutVertical(asset: ImageAsset, atXFraction f: CGFloat) -> (left: ImageAsset, right: ImageAsset)? {
+        guard let img = asset.cgImage, f > 0.001, f < 0.999 else { return nil }
+        let w = CGFloat(img.width)
+        let h = CGFloat(img.height)
+        let leftW = (w * f).rounded()
+        guard leftW >= 1, leftW <= w - 1 else { return nil }
+        guard let leftCG = img.cropping(to: CGRect(x: 0, y: 0, width: leftW, height: h)),
+              let rightCG = img.cropping(to: CGRect(x: leftW, y: 0, width: w - leftW, height: h)),
+              let leftData = pngData(leftCG),
+              let rightData = pngData(rightCG) else { return nil }
+        return (ImageAsset(data: leftData), ImageAsset(data: rightData))
     }
 
     /// 按高度比例切成多段（超高图片自动分页用，比例之和应为 1）
