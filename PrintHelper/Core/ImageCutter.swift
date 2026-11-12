@@ -59,6 +59,55 @@ enum ImageCutter {
         return result
     }
 
+    /// 按宽度比例纵向切成多段（N 等分用，比例之和应为 1）
+    static func splitVertical(asset: ImageAsset, widthFractions: [CGFloat]) -> [ImageAsset]? {
+        guard let img = asset.cgImage, !widthFractions.isEmpty else { return nil }
+        let w = CGFloat(img.width)
+        let h = CGFloat(img.height)
+        var result: [ImageAsset] = []
+        var x: CGFloat = 0
+        for (i, f) in widthFractions.enumerated() {
+            var cw = (i == widthFractions.count - 1) ? w - x : (w * f).rounded()
+            cw = min(cw, w - x)
+            guard cw >= 1 else { return nil }
+            guard let piece = img.cropping(to: CGRect(x: x, y: 0, width: cw, height: h)),
+                  let data = pngData(piece) else { return nil }
+            result.append(ImageAsset(data: data))
+            x += cw
+        }
+        return result
+    }
+
+    /// 顺时针旋转 90°×quarterTurns（烘焙进像素，无损 PNG）
+    static func rotated(asset: ImageAsset, quarterTurns: Int) -> ImageAsset? {
+        let turns = ((quarterTurns % 4) + 4) % 4
+        guard turns != 0, let img = asset.cgImage else { return nil }
+        let w = CGFloat(img.width)
+        let h = CGFloat(img.height)
+        let nw = turns % 2 == 1 ? Int(h) : Int(w)
+        let nh = turns % 2 == 1 ? Int(w) : Int(h)
+        guard let ctx = CGContext(
+            data: nil, width: nw, height: nh,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        switch turns {
+        case 1:
+            ctx.translateBy(x: 0, y: w)
+            ctx.rotate(by: -.pi / 2)
+        case 2:
+            ctx.translateBy(x: w, y: h)
+            ctx.rotate(by: .pi)
+        default:
+            ctx.translateBy(x: h, y: 0)
+            ctx.rotate(by: .pi / 2)
+        }
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let out = ctx.makeImage(), let data = pngData(out) else { return nil }
+        return ImageAsset(data: data)
+    }
+
     /// 无损 PNG 编码
     static func pngData(_ img: CGImage) -> Data? {
         let out = NSMutableData()

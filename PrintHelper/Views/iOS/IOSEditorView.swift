@@ -54,8 +54,13 @@ struct IOSEditorView: View {
             }
             .sheet(item: $cutTarget) { item in
                 if let asset = model.doc.assets[item.assetID] {
-                    CutSheetView(asset: asset) { f, dir in
-                        model.cut(itemID: item.id, atFraction: f, direction: dir)
+                    CutSheetView(asset: asset) { result in
+                        switch result {
+                        case .single(let f, let dir):
+                            model.cut(itemID: item.id, atFraction: f, direction: dir)
+                        case .equal(let n, let dir):
+                            model.splitEqual(itemID: item.id, parts: n, direction: dir)
+                        }
                     }
                 }
             }
@@ -174,6 +179,12 @@ struct IOSEditorView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            Button {
+                model.rotate(itemID: item.id)
+            } label: {
+                Image(systemName: "rotate.right")
+            }
+            .buttonStyle(.borderless)
             Button {
                 cutTarget = item
             } label: {

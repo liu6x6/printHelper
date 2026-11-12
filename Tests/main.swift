@@ -256,6 +256,45 @@ await MainActor.run {
     } catch {
         check(false, "工程保存/打开抛错：\(error)")
     }
+
+    // ---- 13. 旋转（E-10）----
+    let ra = ImageAsset(data: makeImage(w: 800, h: 600, r: 0.3, g: 0.6, b: 0.9))
+    let r90 = ImageCutter.rotated(asset: ra, quarterTurns: 1)!
+    check(r90.pixelSize == CGSize(width: 600, height: 800), "旋转 90°：800x600 → 600x800")
+    let r360 = ImageCutter.rotated(asset: r90, quarterTurns: 3)!
+    check(r360.pixelSize == CGSize(width: 800, height: 600), "再转 270° 恢复原尺寸")
+    // 方向：上红下蓝 顺时针 90° → 红在右
+    let rb = ImageAsset(data: makeBicolorImage(w: 200, h: 200))
+    let rb90 = ImageCutter.rotated(asset: rb, quarterTurns: 1)!
+    if let cg = rb90.cgImage, let buf = topDownPixels(cg) {
+        check(isRed(buf, cg.width, 150, 100), "旋转后红色在右（顺时针）")
+        check(isBlue(buf, cg.width, 50, 100), "旋转后蓝色在左")
+    } else {
+        check(false, "旋转方向测试解码失败")
+    }
+    let rm2 = EditorModel(layoutMode: .flow)
+    rm2.importImages(datas: [makeImage(w: 800, h: 600, r: 0.3, g: 0.6, b: 0.9)])
+    let rid = rm2.doc.items[0].id
+    rm2.rotate(itemID: rid)
+    check(rm2.doc.assets[rm2.doc.items[0].assetID]?.pixelSize == CGSize(width: 600, height: 800), "模型旋转生效")
+    rm2.undo()
+    check(rm2.doc.assets[rm2.doc.items[0].assetID]?.pixelSize == CGSize(width: 800, height: 600), "撤销旋转")
+
+    // ---- 14. N 等分切割（C-7）----
+    let ea = ImageAsset(data: makeImage(w: 800, h: 600, r: 0.8, g: 0.4, b: 0.2))
+    let eh = ImageCutter.split(asset: ea, heightFractions: [1.0/3, 1.0/3, 1.0/3])!
+    check(eh.count == 3 && eh.allSatisfy { $0.pixelSize == CGSize(width: 800, height: 200) }, "横 3 等分：800x200 ×3")
+    let ev = ImageCutter.splitVertical(asset: ea, widthFractions: [0.25, 0.25, 0.25, 0.25])!
+    check(ev.count == 4 && ev.allSatisfy { $0.pixelSize == CGSize(width: 200, height: 600) }, "纵 4 等分：200x600 ×4")
+    let em = EditorModel(layoutMode: .free)
+    em.importImages(datas: [makeImage(w: 800, h: 600, r: 0.8, g: 0.4, b: 0.2)])
+    em.splitEqual(itemID: em.doc.items[0].id, parts: 3, direction: .horizontal)
+    check(em.doc.items.count == 3, "模型横 3 等分 → 3 段")
+    em.undo()
+    check(em.doc.items.count == 1, "撤销等分")
+    em.splitEqual(itemID: em.doc.items[0].id, parts: 4, direction: .vertical)
+    check(em.doc.items.count == 4, "模型纵 4 等分 → 4 段")
+    check(em.doc.items.allSatisfy { abs($0.widthFraction - 0.25) < 0.001 }, "纵等分保持视觉比例 25%")
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")

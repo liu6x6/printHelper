@@ -236,6 +236,59 @@ final class EditorModel {
         selectedID = firstItem.id
     }
 
+    // MARK: - 旋转（E-10）
+
+    func rotate(itemID: UUID, quarterTurns: Int = 1) {
+        guard ((quarterTurns % 4) + 4) % 4 != 0,
+              let idx = doc.items.firstIndex(where: { $0.id == itemID }),
+              let asset = doc.assets[doc.items[idx].assetID],
+              let rotated = ImageCutter.rotated(asset: asset, quarterTurns: quarterTurns) else { return }
+        beginChange()
+        doc.assets[rotated.id] = rotated
+        doc.items[idx].assetID = rotated.id
+        cleanupAssets()
+        if doc.layoutMode == .free { LayoutEngine.normalizeFree(&doc) }
+    }
+
+    // MARK: - N 等分切割（C-7）
+
+    func splitEqual(itemID: UUID, parts: Int, direction: CutDirection) {
+        guard parts >= 2, parts <= 12,
+              let idx = doc.items.firstIndex(where: { $0.id == itemID }),
+              let asset = doc.assets[doc.items[idx].assetID] else { return }
+        let fractions = Array(repeating: 1.0 / CGFloat(parts), count: parts)
+        let pieces: [ImageAsset]?
+        switch direction {
+        case .horizontal: pieces = ImageCutter.split(asset: asset, heightFractions: fractions)
+        case .vertical: pieces = ImageCutter.splitVertical(asset: asset, widthFractions: fractions)
+        }
+        guard let pieces, pieces.count == parts else { return }
+        beginChange()
+        let item = doc.items[idx]
+        var newItems: [ImageItem] = []
+        var cursor = item.origin
+        for (i, piece) in pieces.enumerated() {
+            doc.assets[piece.id] = piece
+            var it = ImageItem(id: i == 0 ? item.id : UUID(), assetID: piece.id)
+            it.widthFraction = direction == .vertical
+                ? max(ImageItem.minFraction, item.widthFraction / CGFloat(parts))
+                : item.widthFraction
+            if doc.layoutMode == .free {
+                it.pageIndex = item.pageIndex
+                it.origin = cursor
+                let sz = doc.size(of: it)
+                cursor = direction == .horizontal
+                    ? CGPoint(x: item.origin.x, y: cursor.y + sz.height + 4)
+                    : CGPoint(x: cursor.x + sz.width + 4, y: item.origin.y)
+            }
+            newItems.append(it)
+        }
+        doc.items.replaceSubrange(idx...idx, with: newItems)
+        if doc.layoutMode == .free { LayoutEngine.normalizeFree(&doc) }
+        cleanupAssets()
+        selectedID = newItems.first?.id
+    }
+
     // MARK: - 工程保存 / 打开（S-1）
 
     func saveProject() throws -> FileWrapper {

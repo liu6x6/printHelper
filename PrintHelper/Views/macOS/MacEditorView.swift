@@ -77,8 +77,13 @@ struct MacEditorView: View {
         ) { _ in }
         .sheet(isPresented: $showCut) {
             if let item = model.selectedItem, let asset = model.doc.asset(for: item) {
-                CutSheetView(asset: asset) { f, dir in
-                    model.cut(itemID: item.id, atFraction: f, direction: dir)
+                CutSheetView(asset: asset) { result in
+                    switch result {
+                    case .single(let f, let dir):
+                        model.cut(itemID: item.id, atFraction: f, direction: dir)
+                    case .equal(let n, let dir):
+                        model.splitEqual(itemID: item.id, parts: n, direction: dir)
+                    }
                 }
             }
         }
@@ -129,7 +134,15 @@ struct MacEditorView: View {
                 Label("切割", systemImage: "scissors")
             }
             .disabled(model.selectedItem == nil)
-            .help("切割选中图片：横向/纵向（也可双击图片）")
+            .help("切割选中图片：自由/N 等分，横向/纵向（也可双击图片）")
+
+            Button {
+                if let id = model.selectedID { model.rotate(itemID: id) }
+            } label: {
+                Label("旋转", systemImage: "rotate.right")
+            }
+            .disabled(model.selectedItem == nil)
+            .help("顺时针旋转 90°")
 
             Button {
                 model.deleteSelected()
