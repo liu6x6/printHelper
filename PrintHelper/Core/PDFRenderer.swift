@@ -21,14 +21,9 @@ enum PDFRenderer {
 
         for entries in pages {
             ctx.beginPDFPage(nil)
-            ctx.saveGState()
-            // 翻转到左上角原点、y 向下的页面坐标系
-            ctx.translateBy(x: 0, y: A4.height)
-            ctx.scaleBy(x: 1, y: -1)
             ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
             ctx.fill(CGRect(x: 0, y: 0, width: A4.width, height: A4.height))
             draw(entries: entries, of: doc, in: ctx)
-            ctx.restoreGState()
             ctx.endPDFPage()
         }
         ctx.closePDF()
@@ -50,8 +45,6 @@ enum PDFRenderer {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
         ctx.scaleBy(x: scale, y: scale)
-        ctx.translateBy(x: 0, y: A4.height)
-        ctx.scaleBy(x: 1, y: -1)
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: A4.width, height: A4.height))
         draw(entries: pages[pageIndex], of: doc, in: ctx)
@@ -61,7 +54,9 @@ enum PDFRenderer {
 
     // MARK: - 绘制
 
-    /// 在「左上角原点」坐标系中绘制一页的所有图片
+    /// 绘制一页的所有图片。
+    /// 注意：上下文保持 Quartz 默认坐标系（y 向上），逐张把页面坐标（左上原点）
+    /// 换算为 PDF 坐标。不能整体翻转上下文，否则 CGContext.draw 会把图片上下镜像。
     private static func draw(entries: [LayoutEngine.Entry], of doc: PrintDocument, in ctx: CGContext) {
         ctx.interpolationQuality = .high
         for entry in entries {
@@ -70,7 +65,9 @@ enum PDFRenderer {
                   entry.frame.width > 0, entry.frame.height > 0 else { continue }
             let targetPixelW = entry.frame.width / 72 * exportDPI
             let img = downsample(raw, maxPixelWidth: targetPixelW)
-            ctx.draw(img, in: entry.frame)
+            let f = entry.frame
+            let drawRect = CGRect(x: f.minX, y: A4.height - f.maxY, width: f.width, height: f.height)
+            ctx.draw(img, in: drawRect)
         }
     }
 

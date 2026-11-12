@@ -20,6 +20,37 @@ func check(_ cond: Bool, _ name: String) {
     if !cond { failures += 1 }
 }
 
+/// 上半红 / 下半蓝的测试图（用于验证导出方向）
+func makeBicolorImage(w: Int, h: Int) -> Data {
+    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: h / 2, width: w, height: h - h / 2))  // 上半（CG y 向上）
+    ctx.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: w, height: h / 2))           // 下半
+    return ImageCutter.pngData(ctx.makeImage()!)!
+}
+
+/// 解码为自上而下的 RGBA 像素 buffer
+func topDownPixels(_ img: CGImage) -> [UInt8]? {
+    let w = img.width, h = img.height
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    guard let ctx = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8,
+                              bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    return buf
+}
+func isRed(_ buf: [UInt8], _ w: Int, _ x: Int, _ y: Int) -> Bool {
+    let i = (y * w + x) * 4
+    return i + 2 < buf.count && buf[i] > 180 && buf[i + 1] < 80 && buf[i + 2] < 80
+}
+func isBlue(_ buf: [UInt8], _ w: Int, _ x: Int, _ y: Int) -> Bool {
+    let i = (y * w + x) * 4
+    return i + 2 < buf.count && buf[i + 2] > 180 && buf[i] < 80 && buf[i + 1] < 80
+}
+
 await MainActor.run {
     let s = PageSettings()
     let usableH = s.usableHeight
@@ -153,6 +184,49 @@ await MainActor.run {
     check(right.origin.x > origX && right.origin.y == left.origin.y, "纵切右段摆在左段右侧同一行")
     vm.undo()
     check(vm.doc.items.count == 1, "撤销纵切")
+
+    // ---- 11. 回归：导出方向（bug：PDF 内容上下颠倒）----
+    let om = EditorModel(layoutMode: .flow)
+    om.importImages(datas: [makeBicolorImage(w: 200, h: 200)])
+    let ps = PageSettings()
+    let imgH = ps.usableWidth  // 正方形图，铺满页宽
+    // PNG（300 DPI）
+    if let png = om.exportPagePNGs().first,
+       let src = CGImageSourceCreateWithData(png as CFData, nil),
+       let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+       let buf = topDownPixels(cg) {
+        let sc = 300.0 / 72.0
+        let cx = Int((ps.margin + imgH / 2) * sc)
+        let yTop = Int((ps.margin + 40) * sc)
+        let yBot = Int((ps.margin + imgH - 40) * sc)
+        check(isRed(buf, cg.width, cx, yTop), "PNG：图片上部为红（正立）")
+        check(isBlue(buf, cg.width, cx, yBot), "PNG：图片下部为蓝（正立）")
+    } else {
+        check(false, "PNG 方向测试导出失败")
+    }
+    // PDF（光栅化后采样）
+    if let pdf = om.exportPDF(), let pdoc = PDFDocument(data: pdf), let page = pdoc.page(at: 0) {
+        let sc: CGFloat = 2
+        let w = Int(A4.width * sc), h = Int(A4.height * sc)
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        if let ctx = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8,
+                               bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.scaleBy(x: sc, y: sc)
+            page.draw(with: .mediaBox, to: ctx)
+            let cx = Int((ps.margin + imgH / 2) * sc)
+            let yTop = Int((ps.margin + 40) * sc)
+            let yBot = Int((ps.margin + imgH - 40) * sc)
+            check(isRed(buf, w, cx, yTop), "PDF：图片上部为红（正立）")
+            check(isBlue(buf, w, cx, yBot), "PDF：图片下部为蓝（正立）")
+        } else {
+            check(false, "PDF 光栅化失败")
+        }
+    } else {
+        check(false, "PDF 方向测试导出失败")
+    }
 }
 
 print(failures == 0 ? "\n全部通过 ✅" : "\n\(failures) 项失败 ❌")
