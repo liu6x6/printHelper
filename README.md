@@ -78,6 +78,21 @@ xcodebuild -project PrintHelper.xcodeproj -scheme PrintHelper \
 
 > 💡 `.xcodeproj` 由 XcodeGen 生成，不入库；改完 `project.yml` 重新 `xcodegen generate` 即可。
 
+## 🎨 App 图标（一键生成 / 替换）
+
+图标集位于 `PrintHelper/Media.xcassets/AppIcon.appiconset`，用脚本从图标目录一键生成或替换（仅依赖 macOS 自带 `sips`）：
+
+```bash
+./scripts/generate_appicon.sh                   # 默认从 ~/123 生成
+./scripts/generate_appicon.sh /path/to/icons    # 指定图标目录
+./scripts/generate_appicon.sh /path/to/1024.png # 单张大图，自动缩放全部尺寸
+```
+
+- 源目录命名约定：`Icon-<pt>[@<scale>x].png`（如 `Icon-20@3x.png`、`Icon-83.5@2x.png`）
+- 覆盖 iOS 全套（iPhone/iPad/Marketing）+ macOS 全套，共 28 个尺寸
+- 缺某个尺寸时自动用最大图（`Icon-1024.png`）缩放补齐；重复运行即“替换”
+- 脚本只更新 catalog；`project.yml` 已设 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`，重新构建即生效
+
 ## 🧪 测试
 
 核心引擎（排版 / 切割 / 导出）不依赖 UI，可单独编译验证：
