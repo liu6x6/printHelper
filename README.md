@@ -78,20 +78,26 @@ xcodebuild -project PrintHelper.xcodeproj -scheme PrintHelper \
 
 > 💡 `.xcodeproj` 由 XcodeGen 生成，不入库；改完 `project.yml` 重新 `xcodegen generate` 即可。
 
-## 🎨 App 图标（一键生成 / 替换）
+## 🎨 App 图标（一键生成 / 替换，通用脚本）
 
-图标集位于 `PrintHelper/Media.xcassets/AppIcon.appiconset`，用脚本从图标目录一键生成或替换（仅依赖 macOS 自带 `sips`）：
+只需指定**项目路径**，脚本自动定位/创建图标集（仅依赖 macOS 自带 `sips`）：
 
 ```bash
-./scripts/generate_appicon.sh                   # 默认从 ~/123 生成
-./scripts/generate_appicon.sh /path/to/icons    # 指定图标目录
-./scripts/generate_appicon.sh /path/to/1024.png # 单张大图，自动缩放全部尺寸
+./scripts/generate_appicon.sh                     # 本项目，图标默认 ~/123
+./scripts/generate_appicon.sh /path/to/MyProject  # 任意项目，自动找 xcassets/AppIcon
+./scripts/generate_appicon.sh . /path/to/icons    # 指定图标源目录
+./scripts/generate_appicon.sh . /path/to/1024.png # 单张大图，自动缩放全部尺寸
 ```
 
-- 源目录命名约定：`Icon-<pt>[@<scale>x].png`（如 `Icon-20@3x.png`、`Icon-83.5@2x.png`）
-- 覆盖 iOS 全套（iPhone/iPad/Marketing）+ macOS 全套，共 28 个尺寸
-- 缺某个尺寸时自动用最大图（`Icon-1024.png`）缩放补齐；重复运行即“替换”
-- 脚本只更新 catalog；`project.yml` 已设 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`，重新构建即生效
+**自动定位规则**：
+1. 递归查找项目下所有 `*.xcassets`（跳过 .git/build/DerivedData/Pods 等）
+2. 优先使用已含 `AppIcon.appiconset` 的 catalog
+3. 有 catalog 但没 AppIcon → 在其中新建 `AppIcon.appiconset`
+4. 完全没有 catalog → 在项目根新建 `Assets.xcassets/AppIcon.appiconset`
+
+**图标源**：默认 `~/123`，命名约定 `Icon-<pt>[@<scale>x].png`（如 `Icon-20@3x.png`、`Icon-83.5@2x.png`）；覆盖 iOS 全套 + macOS 全套共 28 个尺寸，缺尺寸自动用最大图缩放补齐；重复运行即“替换”。
+
+> 脚本只更新 catalog；确保 build 设置含 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 且 catalog 已加入 target sources（本项目 `project.yml` 已配好），重新构建即生效。
 
 ## 🧪 测试
 

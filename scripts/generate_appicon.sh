@@ -1,37 +1,79 @@
 #!/bin/bash
 # ============================================================
-# generate_appicon.sh — 一键生成 / 替换 AppIcon 图标集
+# generate_appicon.sh — 一键生成 / 替换 AppIcon 图标集（通用版）
 #
 # 用法:
-#   ./scripts/generate_appicon.sh                     # 默认从 ~/123 生成
-#   ./scripts/generate_appicon.sh /path/to/icons      # 指定图标目录
-#   ./scripts/generate_appicon.sh /path/to/1024.png   # 单张大图（自动缩放全部尺寸）
-#   ./scripts/generate_appicon.sh ~/123 /path/to/Media.xcassets
+#   ./scripts/generate_appicon.sh                     # 当前脚本所在项目，图标默认 ~/123
+#   ./scripts/generate_appicon.sh /path/to/MyProject  # 指定项目路径（自动找 xcassets/AppIcon）
+#   ./scripts/generate_appicon.sh /path/to/MyProject /path/to/icons
+#   ./scripts/generate_appicon.sh . ~/123             # 当前目录作为项目
 #
-# 源目录命名约定: Icon-<pt>[@<scale>x].png（如 Icon-20@3x.png、Icon-83.5@2x.png）
-# 缺少某个尺寸时，自动用最大图（Icon-1024.png 或目录中最大 PNG）sips 缩放补齐。
-# 依赖: macOS 自带 sips，无需安装任何第三方工具。
+# 自动定位规则:
+#   1. 递归查找项目下所有 *.xcassets（跳过 .git/build/DerivedData/Pods 等）
+#   2. 优先使用已包含 AppIcon.appiconset 的 catalog
+#   3. 有 catalog 但没有 AppIcon → 在第一个 catalog 里新建 AppIcon.appiconset
+#   4. 完全没有 catalog → 在项目根新建 Assets.xcassets/AppIcon.appiconset
+#
+# 图标源:
+#   默认 ~/123；命名约定 Icon-<pt>[@<scale>x].png（如 Icon-20@3x.png）
+#   也可传单个大图（如 1024.png），自动缩放全部尺寸
+#   缺某个尺寸时自动用最大图 sips 缩放补齐
+#
+# 依赖: macOS 自带 sips，无需第三方工具。重复运行即“替换”。
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-SRC="${1:-$HOME/123}"
-ASSETS="${2:-$PROJECT_ROOT/PrintHelper/Media.xcassets}"
-APPICON="$ASSETS/AppIcon.appiconset"
+PROJECT="${1:-$PROJECT_ROOT}"
+ICONS="${2:-$HOME/123}"
 
 command -v sips >/dev/null 2>&1 || { echo "错误: 需要 macOS 自带的 sips"; exit 1; }
+[[ -d "$PROJECT" ]] || { echo "错误: 项目目录不存在: $PROJECT"; exit 1; }
+PROJECT="$(cd "$PROJECT" && pwd)"
 
-# ---------- 1. 确定 master 大图（用于补齐缺失尺寸） ----------
+# ---------- 1. 自动定位 xcassets / AppIcon ----------
+CATALOGS=$(find "$PROJECT" -type d -name "*.xcassets" \
+    -not -path "*/.git/*" -not -path "*/build/*" -not -path "*/DerivedData/*" \
+    -not -path "*/Pods/*" -not -path "*/.build/*" -not -path "*/node_modules/*" \
+    2>/dev/null | sort || true)
+
+ASSETS=""
+APPICON=""
+# 2. 优先：已含 AppIcon.appiconset 的 catalog
+while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    if [[ -d "$d/AppIcon.appiconset" ]]; then
+        ASSETS="$d"; APPICON="$d/AppIcon.appiconset"
+        echo "定位到已有 AppIcon: $APPICON"
+        break
+    fi
+done <<< "$CATALOGS"
+
+if [[ -z "$ASSETS" ]]; then
+    first=$(head -1 <<< "$CATALOGS")
+    if [[ -n "$first" ]]; then
+        # 3. 有 catalog 没 AppIcon → 补建
+        ASSETS="$first"; APPICON="$first/AppIcon.appiconset"
+        echo "已有 catalog 无 AppIcon，新建: $APPICON"
+    else
+        # 4. 完全没有 → 新建 Assets.xcassets
+        ASSETS="$PROJECT/Assets.xcassets"; APPICON="$ASSETS/AppIcon.appiconset"
+        echo "未找到 xcassets，新建: $ASSETS"
+    fi
+fi
+mkdir -p "$APPICON"
+
+# ---------- 2. 确定 master 大图（用于补齐缺失尺寸） ----------
 MASTER=""
-if [[ -f "$SRC" ]]; then
-    MASTER="$SRC"
-elif [[ -d "$SRC" ]]; then
-    if [[ -f "$SRC/Icon-1024.png" ]]; then
-        MASTER="$SRC/Icon-1024.png"
+if [[ -f "$ICONS" ]]; then
+    MASTER="$ICONS"
+elif [[ -d "$ICONS" ]]; then
+    if [[ -f "$ICONS/Icon-1024.png" ]]; then
+        MASTER="$ICONS/Icon-1024.png"
     else
         best=0
-        for f in "$SRC"/*.png "$SRC"/*.jpg "$SRC"/*.jpeg; do
+        for f in "$ICONS"/*.png "$ICONS"/*.jpg "$ICONS"/*.jpeg; do
             [[ -f "$f" ]] || continue
             w=$(sips -g pixelWidth "$f" 2>/dev/null | awk '/pixelWidth/{print $2}')
             [[ -n "$w" ]] || continue
@@ -39,18 +81,16 @@ elif [[ -d "$SRC" ]]; then
         done
     fi
 else
-    echo "错误: 源不存在: $SRC"; exit 1
+    echo "错误: 图标源不存在: $ICONS"; exit 1
 fi
-[[ -n "$MASTER" && -f "$MASTER" ]] || { echo "错误: 找不到可用源图: $SRC"; exit 1; }
-echo "源: $SRC"
-echo "master: $MASTER"
+[[ -n "$MASTER" && -f "$MASTER" ]] || { echo "错误: 找不到可用源图: $ICONS"; exit 1; }
+echo "项目: $PROJECT"
+echo "图标源: $ICONS (master: $(basename "$MASTER"))"
 
-# ---------- 2. 清空旧图标（保证“替换”干净） ----------
-mkdir -p "$APPICON"
+# ---------- 3. 清空旧图标（保证“替换”干净） ----------
 rm -f "$APPICON"/*.png
 
-# ---------- 3. 条目表: idiom|pt|scale|文件名 ----------
-# iOS 全套 + macOS 全套（Xcode 通用 appiconset）
+# ---------- 4. 条目表: idiom|pt|scale|文件名（iOS 全套 + macOS 全套） ----------
 ENTRIES=(
     "iphone|20|2|Icon-20@2x.png"
     "iphone|20|3|Icon-20@3x.png"
@@ -82,13 +122,13 @@ ENTRIES=(
     "mac|512|2|Icon-512@2x.png"
 )
 
-# ---------- 4. 逐条拷贝 / 缩放，并累积 Contents.json ----------
+# ---------- 5. 逐条拷贝 / 缩放，并累积 Contents.json ----------
 json_images=""
 copied=0; resized=0
 for entry in "${ENTRIES[@]}"; do
     IFS='|' read -r idiom pt scale filename <<< "$entry"
     px=$(awk "BEGIN{printf \"%d\", $pt * $scale}")
-    src="$SRC/$filename"
+    src="$ICONS/$filename"
     if [[ -f "$src" ]]; then
         cp "$src" "$APPICON/$filename"
         copied=$((copied + 1))
@@ -120,7 +160,7 @@ cat > "$APPICON/Contents.json" <<EOF
 }
 EOF
 
-# ---------- 5. catalog 根 Contents.json ----------
+# ---------- 6. catalog 根 Contents.json ----------
 if [[ ! -f "$ASSETS/Contents.json" ]]; then
     cat > "$ASSETS/Contents.json" <<EOF
 {
@@ -134,4 +174,4 @@ fi
 
 echo "完成: $APPICON"
 echo "  直接拷贝 $copied 个, 缩放补齐 $resized 个, 共 ${#ENTRIES[@]} 个尺寸"
-echo "提示: 若首次添加 catalog，请确认 project.yml 含 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon，然后 xcodegen generate"
+echo "提示: 确保 build 设置含 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon，且 catalog 已加入 target sources"
