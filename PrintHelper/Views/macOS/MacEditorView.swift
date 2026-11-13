@@ -340,6 +340,20 @@ struct MacDocumentCanvas: View {
     }
 }
 
+/// 光标工具
+enum Cursors {
+    /// 对角双向箭头（角点缩放）
+    static let diagonalResize: NSCursor = {
+        let size = NSSize(width: 18, height: 18)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: nil)?
+            .draw(in: NSRect(origin: .zero, size: size))
+        img.unlockFocus()
+        return NSCursor(image: img, hotSpot: NSPoint(x: 9, y: 9))
+    }()
+}
+
 /// 可拖动 / 可缩放的图片对象（全局坐标，拖拽时实时跨页）
 struct MacItemView: View {
     let model: EditorModel
@@ -352,16 +366,20 @@ struct MacItemView: View {
 
     @State private var dragStart: CGPoint?
     @State private var resizeStart: CGFloat?
+    @State private var isDragging = false
+    @State private var isResizing = false
 
     private var isSelected: Bool { model.selectedID == item.id }
+    private var usableW: CGFloat { model.doc.settings.usableWidth }
+    private var aspect: CGFloat { model.doc.assets[item.assetID]?.aspectRatio ?? 1 }
 
     var body: some View {
         let w = globalFrame.width
         let h = globalFrame.height
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             imageView(w: w, h: h)
             if isSelected {
-                resizeHandle
+                handles(w: w, h: h)
             }
         }
         .offset(x: globalFrame.minX, y: globalFrame.minY)
@@ -379,6 +397,10 @@ struct MacItemView: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .onHover { hovering in
+                    guard !isDragging, !isResizing else { return }
+                    if hovering { NSCursor.crosshair.set() } else { NSCursor.arrow.set() }
+                }
                 .onTapGesture(count: 2) { onCutRequest(item.id) }
                 .onTapGesture { model.selectedID = item.id }
                 .gesture(moveGesture)
@@ -388,13 +410,17 @@ struct MacItemView: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 2)
+        // 关键修复：用 .global 坐标系。默认 .local 会随图片移动，
+        // translation 被“吃掉”一部分，导致图片不跟手（跨页时尤其明显）
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
             .onChanged { v in
                 if dragStart == nil {
                     dragStart = globalFrame.origin
                     model.beginChange()
                     model.selectedID = item.id
+                    isDragging = true
                 }
+                NSCursor.crosshair.set()
                 let start = dragStart ?? globalFrame.origin
                 let gx = start.x + v.translation.width
                 let gy = start.y + v.translation.height
@@ -455,33 +481,69 @@ struct MacItemView: View {
             }
             .onEnded { _ in
                 dragStart = nil
+                isDragging = false
+                NSCursor.arrow.set()
                 onGuides([])
                 model.finishFreeEdit()
             }
     }
 
-    private var resizeHandle: some View {
-        Circle()
-            .fill(Color.accentColor)
-            .frame(width: 14, height: 14)
-            .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-            .offset(x: 7, y: 7)
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { v in
-                        if resizeStart == nil {
-                            resizeStart = item.widthFraction
-                            model.beginChange()
-                        }
-                        let start = resizeStart ?? item.widthFraction
-                        let f = start + v.translation.width / zoom / model.doc.settings.usableWidth
-                        model.setFraction(item.id, f)
+    // MARK: - 缩放手柄（四边中点 + 角点，各配对应光标）
+
+    @ViewBuilder
+    private func handles(w: CGFloat, h: CGFloat) -> some View {
+        resizeHandle(size: CGSize(width: 6, height: 20), offset: CGSize(width: -w / 2, height: 0),
+                     cursor: .resizeLeftRight) { -$0.width / zoom / usableW }
+        resizeHandle(size: CGSize(width: 6, height: 20), offset: CGSize(width: w / 2, height: 0),
+                     cursor: .resizeLeftRight) { $0.width / zoom / usableW }
+        resizeHandle(size: CGSize(width: 20, height: 6), offset: CGSize(width: 0, height: -h / 2),
+                     cursor: .resizeUpDown) { -$0.height / zoom / (usableW * aspect) }
+        resizeHandle(size: CGSize(width: 20, height: 6), offset: CGSize(width: 0, height: h / 2),
+                     cursor: .resizeUpDown) { $0.height / zoom / (usableW * aspect) }
+        resizeHandle(size: CGSize(width: 14, height: 14), offset: CGSize(width: w / 2, height: h / 2),
+                     cursor: Cursors.diagonalResize, isCircle: true) { $0.width / zoom / usableW }
+    }
+
+    private func resizeHandle(
+        size: CGSize,
+        offset: CGSize,
+        cursor: NSCursor,
+        isCircle: Bool = false,
+        delta: @escaping (CGSize) -> CGFloat
+    ) -> some View {
+        Group {
+            if isCircle {
+                Circle().fill(Color.accentColor)
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+            } else {
+                Capsule().fill(Color.accentColor)
+                    .overlay(Capsule().strokeBorder(.white, lineWidth: 1.5))
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .offset(x: offset.width, y: offset.height)
+        .onHover { hovering in
+            guard !isDragging, !isResizing else { return }
+            if hovering { cursor.set() } else { NSCursor.arrow.set() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { v in
+                    if resizeStart == nil {
+                        resizeStart = item.widthFraction
+                        model.beginChange()
+                        isResizing = true
                     }
-                    .onEnded { _ in
-                        resizeStart = nil
-                        model.finishFreeEdit()
-                    }
-            )
+                    cursor.set()
+                    model.setFraction(item.id, (resizeStart ?? item.widthFraction) + delta(v.translation))
+                }
+                .onEnded { _ in
+                    resizeStart = nil
+                    isResizing = false
+                    NSCursor.arrow.set()
+                    model.finishFreeEdit()
+                }
+        )
     }
 }
 #endif
