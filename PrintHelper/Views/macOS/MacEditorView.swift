@@ -8,13 +8,15 @@ import UniformTypeIdentifiers
 struct MacEditorView: View {
     @State private var model = EditorModel(layoutMode: .free)
     @State private var zoom: CGFloat = 1.0
-    @State private var showImporter = false
-    @State private var showExporter = false
     @State private var showCut = false
-    @State private var exportDoc = PDFExportDocument(data: Data())
-    @State private var showProjectImporter = false
-    @State private var showProjectExporter = false
-    @State private var projectDoc = ProjectDocument(wrapper: FileWrapper(directoryWithFileWrappers: [:]))
+    /// 打印任务：runModal 是异步的，必须持有，否则 view/operation 提前释放 → 打不出东西
+    @State private var activePrint: NSPrintOperation?
+    @State private var busyText: String?
+    @State private var errorMessage: String?
+    @State private var statusText: String?
+
+    /// 目录缓存（工程文件夹 / 导出目录 / 导入目录，跨启动保留访问权）
+    private var workspace: WorkspaceStore { WorkspaceStore.shared }
 
     var body: some View {
         ScrollView([.vertical, .horizontal]) {
@@ -30,52 +32,11 @@ struct MacEditorView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .dropDestination(for: URL.self) { urls, _ in
-            let datas = urls.compactMap { try? Data(contentsOf: $0) }
-            model.importImages(datas: datas)
-            return !datas.isEmpty
+            importDropped(urls)
         }
         .toolbar { toolbarContent }
         .navigationTitle("PrintHelper")
-        .navigationSubtitle("共 \(model.pages.count) 页 · A4")
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                let datas = urls.compactMap { url -> Data? in
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    return try? Data(contentsOf: url)
-                }
-                model.importImages(datas: datas)
-            }
-        }
-        .fileExporter(
-            isPresented: $showExporter,
-            document: exportDoc,
-            contentType: .pdf,
-            defaultFilename: "作业"
-        ) { _ in }
-        .fileImporter(
-            isPresented: $showProjectImporter,
-            allowedContentTypes: [.phDocument],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                if let wrapper = try? FileWrapper(url: url, options: .immediate) {
-                    try? model.openProject(wrapper)
-                }
-            }
-        }
-        .fileExporter(
-            isPresented: $showProjectExporter,
-            document: projectDoc,
-            contentType: .phDocument,
-            defaultFilename: "作业"
-        ) { _ in }
+        .navigationSubtitle(subtitle)
         .sheet(isPresented: $showCut) {
             if let item = model.selectedItem, let asset = model.doc.asset(for: item) {
                 CutSheetView(asset: asset) { result in
@@ -89,32 +50,56 @@ struct MacEditorView: View {
             }
         }
         .onDeleteCommand { model.deleteSelected() }
-        .focusedSceneValue(\.exportPDFAction, model.doc.items.isEmpty ? nil : exportPDF)
+        .focusedSceneValue(\.exportPDFAction, model.doc.items.isEmpty ? nil : { export(.pdf) })
         .focusedSceneValue(\.saveProjectAction, saveProject)
-        .focusedSceneValue(\.openProjectAction, { showProjectImporter = true })
+        .focusedSceneValue(\.openProjectAction, openProjectPanel)
+        .overlay { statusOverlay }
+        .alert("出错了", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("好", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .onOpenURL { url in openProject(at: url) }   // Finder 双击 / 「打开方式」.phdoc
+        .task { ExportService.cleanTempExports() }
     }
+
+    private var subtitle: String {
+        var text = "共 \(model.pages.count) 页 · A4"
+        if let dir = workspace.workspaceName { text += " · 工程文件夹：\(dir)" }
+        return text
+    }
+
+    // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
             Button {
-                showProjectImporter = true
+                openProjectPanel()
             } label: {
-                Label("打开工程", systemImage: "folder")
+                Label("打开工程", systemImage: workspace.hasWorkspace ? "folder.fill" : "folder")
             }
             .keyboardShortcut("o", modifiers: .command)
-            .help("打开 .phdoc 工程文件（⌘O）")
+            .help(workspace.hasWorkspace
+                  ? "打开 .phdoc 工程文件（⌘O）· 已记住文件夹「\(workspace.workspaceName ?? "")」"
+                  : "打开 .phdoc 工程文件（⌘O）")
 
             Button(action: saveProject) {
-                Label("保存工程", systemImage: "tray.and.arrow.down")
+                Label("保存工程", systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("s", modifiers: .command)
-            .help("保存可编辑工程（⌘S）")
+            .disabled(model.doc.items.isEmpty)
+            .help(workspace.hasWorkspace
+                  ? "保存可编辑工程（⌘S）· 默认存到「\(workspace.workspaceName ?? "")」"
+                  : "保存可编辑工程（⌘S），所在文件夹会被记住")
 
             Divider()
 
             Button {
-                showImporter = true
+                importImagesPanel()
             } label: {
                 Label("导入图片", systemImage: "photo.badge.plus")
             }
@@ -205,36 +190,268 @@ struct MacEditorView: View {
             }
             .keyboardShortcut("p", modifiers: .command)
             .disabled(model.doc.items.isEmpty)
-            .help("直接打印（⌘P）")
+            .help("打印全部页（⌘P）")
 
-            Button(action: exportPDF) {
-                Label("导出 PDF", systemImage: "square.and.arrow.down")
+            Button {
+                export(.pdf)
+            } label: {
+                Label("导出 PDF", systemImage: "square.and.arrow.down.on.square")
             }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(model.doc.items.isEmpty)
             .help("导出标准 A4 PDF（⌘E，也可用文件菜单）")
+
+            Menu {
+                Button("每页 PNG（300 DPI）") { export(.pagePNG) }
+                Button("每页 JPG（300 DPI）") { export(.pageJPG) }
+                Divider()
+                Button("长图 PNG（拼接全部页）") { export(.longPNG) }
+                Button("长图 JPG（拼接全部页）") { export(.longJPG) }
+            } label: {
+                Label("导出图片", systemImage: "photo.on.rectangle")
+            }
+            .disabled(model.doc.items.isEmpty)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("导出 PNG / JPG：每页一张，或全部页拼成长图")
         }
     }
 
+    // MARK: - 打印（全部页）
+
     private func printDocument() {
-        guard let data = model.exportPDF(), let document = PDFDocument(data: data) else { return }
-        let pdfView = PDFView(frame: NSRect(x: 0, y: 0, width: A4.width, height: A4.height))
-        pdfView.document = document
-        pdfView.autoScales = true
-        let op = NSPrintOperation(view: pdfView, printInfo: .shared)
-        op.run()
+        guard !model.doc.items.isEmpty else {
+            errorMessage = ExportError.empty.localizedDescription
+            return
+        }
+        let doc = model.doc
+        busyText = "正在生成打印数据…"
+        Task.detached(priority: .userInitiated) {
+            let data = PDFRenderer.pdfData(for: doc)
+            await MainActor.run {
+                busyText = nil
+                guard let data else {
+                    errorMessage = "生成打印数据失败"
+                    return
+                }
+                // PDFPrintView 实现了 knowsPageRange/rectForPage → 打印**全部页**
+                guard let op = MacPrinter.makeOperation(for: data) else {
+                    errorMessage = "没有可打印的内容"
+                    return
+                }
+                activePrint = op          // 必须持有：runModal 是异步的
+                if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                    op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+                } else {
+                    op.run()
+                }
+            }
+        }
     }
 
-    private func exportPDF() {
-        guard let data = model.exportPDF() else { return }
-        exportDoc = PDFExportDocument(data: data)
-        showExporter = true
+    // MARK: - 导出（后台渲染 → NSSavePanel，记住上次目录）
+
+    private func export(_ kind: ExportKind) {
+        guard !model.doc.items.isEmpty else {
+            errorMessage = ExportError.empty.localizedDescription
+            return
+        }
+        let doc = model.doc
+        busyText = "\(kind.label)…"
+        Task.detached(priority: .userInitiated) {
+            let result = Result { try ExportService.render(doc: doc, kind: kind) }
+            await MainActor.run {
+                busyText = nil
+                switch result {
+                case .success(let files): saveRendered(files, kind: kind)
+                case .failure(let error): errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func saveRendered(_ files: [RenderedFile], kind: ExportKind) {
+        guard let first = files.first else { return }
+        workspace.withExportDir { cachedDir in
+            if files.count == 1 {
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [kind.contentType]
+                panel.nameFieldStringValue = first.name
+                panel.canCreateDirectories = true
+                panel.directoryURL = cachedDir     // ← 上次导出的目录
+                panel.prompt = "导出"
+                panel.message = "\(kind.label)（目录已记住，下次直接定位到这里）"
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    try first.data.write(to: url, options: .atomic)
+                    workspace.rememberExportDir(url)
+                    status("已导出 \(url.lastPathComponent)")
+                } catch {
+                    errorMessage = "写入失败：\(error.localizedDescription)"
+                }
+            } else {
+                // 每页一张：选目录后一次性写出全部文件
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.canCreateDirectories = true
+                panel.directoryURL = cachedDir
+                panel.prompt = "导出到这里"
+                panel.message = "\(kind.label)：\(files.count) 个文件"
+                guard panel.runModal() == .OK, let dir = panel.url else { return }
+                workspace.rememberExportDir(dir)
+                do {
+                    for file in files {
+                        try file.data.write(to: dir.appendingPathComponent(file.name), options: .atomic)
+                    }
+                    status("已导出 \(files.count) 个文件到 \(dir.lastPathComponent)")
+                } catch {
+                    errorMessage = "写入失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    // MARK: - 工程：打开 / 保存（记住文件夹）
+
+    private func openProjectPanel() {
+        workspace.withWorkspaceDir { cachedDir in
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.phDocument]
+            panel.allowsMultipleSelection = false
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = true      // .phdoc 是目录包
+            panel.treatsFilePackagesAsDirectories = false
+            panel.directoryURL = cachedDir         // ← 上次打开/保存的文件夹
+            panel.prompt = "打开"
+            panel.message = "选择 .phdoc 工程（所在文件夹会被记住）"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            openProject(at: url)
+        }
+    }
+
+    private func openProject(at url: URL) {
+        do {
+            let wrapper = try workspace.loadProject(at: url)
+            try model.openProject(wrapper)
+            status("已打开 \(url.lastPathComponent)")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func saveProject() {
-        guard let wrapper = try? model.saveProject() else { return }
-        projectDoc = ProjectDocument(wrapper: wrapper)
-        showProjectExporter = true
+        guard !model.doc.items.isEmpty else {
+            errorMessage = ExportError.empty.localizedDescription
+            return
+        }
+        do {
+            let wrapper = try model.saveProject()
+            workspace.withWorkspaceDir { cachedDir in
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [.phDocument]
+                panel.nameFieldStringValue = "\(workspace.suggestedProjectName()).\(ProjectFile.fileExtension)"
+                panel.canCreateDirectories = true
+                panel.directoryURL = cachedDir     // ← 上次的工程文件夹
+                panel.prompt = "保存"
+                panel.message = "保存可编辑工程 .phdoc（所在文件夹会被记住）"
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    wrapper.preferredFilename = url.lastPathComponent
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        try FileManager.default.removeItem(at: url)   // 目录包需要先删旧的
+                    }
+                    try wrapper.write(to: url, options: .atomic, originalContentsURL: nil)
+                    workspace.rememberWorkspace(url)
+                    status("已保存 \(url.lastPathComponent)")
+                } catch {
+                    errorMessage = "保存失败：\(error.localizedDescription)"
+                }
+            }
+        } catch {
+            errorMessage = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - 导入
+
+    private func importImagesPanel() {
+        workspace.withImportDir { cachedDir in
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.image]
+            panel.allowsMultipleSelection = true
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.directoryURL = cachedDir         // ← 上次导入图片的文件夹
+            panel.prompt = "导入"
+            panel.message = "选择作业图片（可多选）"
+            guard panel.runModal() == .OK else { return }
+            let urls = panel.urls
+            if let first = urls.first { workspace.rememberImportDir(first) }
+            let datas = urls.compactMap { try? Data(contentsOf: $0) }
+            guard !datas.isEmpty else {
+                errorMessage = "没有可导入的图片"
+                return
+            }
+            model.importImages(datas: datas)
+        }
+    }
+
+    /// Finder 拖入：.phdoc 直接打开工程，其它当图片导入
+    private func importDropped(_ urls: [URL]) -> Bool {
+        if let project = urls.first(where: { $0.pathExtension == ProjectFile.fileExtension }) {
+            openProject(at: project)
+            return true
+        }
+        let datas = urls.compactMap { url -> Data? in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            return try? Data(contentsOf: url)
+        }
+        if let first = urls.first { workspace.rememberImportDir(first) }
+        guard !datas.isEmpty else { return false }
+        model.importImages(datas: datas)
+        return true
+    }
+
+    // MARK: - 状态提示
+
+    @ViewBuilder
+    private var statusOverlay: some View {
+        ZStack {
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    if let statusText {
+                        Text(statusText)
+                            .font(.callout)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: Capsule())
+                            .shadow(radius: 3)
+                            .padding(16)
+                            .transition(.opacity)
+                    }
+                }
+            }
+            if let busyText {
+                ProgressView(busyText)
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .shadow(radius: 8)
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.2), value: statusText)
+    }
+
+    private func status(_ text: String) {
+        statusText = text
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if statusText == text { statusText = nil }
+        }
     }
 
     private func percentBinding(_ id: UUID) -> Binding<Double> {
@@ -342,6 +559,65 @@ struct MacDocumentCanvas: View {
 
 /// 光标工具
 enum Cursors {
+    /// 移动/摆放光标：直接用 Media.xcassets 里的 **Arrowfourway** symbol（四向箭头），
+    /// 白色描边垫底 + 深色主体，深浅背景都看得清；热点在图形中心。
+    static let moveArrow: NSCursor = symbolCursor(named: "Arrowfourway", pointSize: 22) ?? .crosshair
+
+    /// 把 asset catalog 里的 symbol 渲染成光标（2x 位图，Retina 不糊）
+    private static func symbolCursor(named name: String, pointSize: CGFloat) -> NSCursor? {
+        guard let configured = NSImage(named: name)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium))
+        else { return nil }
+        let glyph = configured.size
+        guard glyph.width > 1, glyph.height > 1 else { return nil }
+
+        // 白色放大版垫底当描边，深色原尺寸叠在上面
+        let pad: CGFloat = 2.5
+        let size = NSSize(width: glyph.width + pad * 2, height: glyph.height + pad * 2)
+        let white = tinted(configured, color: .white)
+        let dark = tinted(configured, color: NSColor(white: 0.1, alpha: 1))
+
+        guard let rep = bitmapRep(size: size) else { return nil }
+        let image = NSImage(size: size)
+        image.addRepresentation(rep)
+        guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        white.draw(in: NSRect(origin: .zero, size: size))
+        dark.draw(in: NSRect(x: pad, y: pad, width: glyph.width, height: glyph.height))
+        NSGraphicsContext.restoreGraphicsState()
+
+        return NSCursor(image: image, hotSpot: NSPoint(x: size.width / 2, y: size.height / 2))
+    }
+
+    /// 单色化：用 destinationIn 把 symbol 的 alpha 轮廓填成指定颜色
+    private static func tinted(_ src: NSImage, color: NSColor) -> NSImage {
+        let size = src.size
+        guard let rep = bitmapRep(size: size) else { return src }
+        let out = NSImage(size: size)
+        out.addRepresentation(rep)
+        guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return src }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        color.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        src.draw(in: NSRect(origin: .zero, size: size), from: .zero, operation: .destinationIn, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return out
+    }
+
+    private static func bitmapRep(size: NSSize, scale: CGFloat = 2) -> NSBitmapImageRep? {
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: max(1, Int((size.width * scale).rounded())),
+            pixelsHigh: max(1, Int((size.height * scale).rounded())),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        )
+        rep?.size = size
+        return rep
+    }
+
     /// 对角双向箭头（角点缩放）
     static let diagonalResize: NSCursor = {
         let size = NSSize(width: 18, height: 18)
@@ -399,7 +675,7 @@ struct MacItemView: View {
                 .contentShape(Rectangle())
                 .onHover { hovering in
                     guard !isDragging, !isResizing else { return }
-                    if hovering { NSCursor.crosshair.set() } else { NSCursor.arrow.set() }
+                    if hovering { Cursors.moveArrow.set() } else { NSCursor.arrow.set() }
                 }
                 .onTapGesture(count: 2) { onCutRequest(item.id) }
                 .onTapGesture { model.selectedID = item.id }
@@ -420,7 +696,7 @@ struct MacItemView: View {
                     model.selectedID = item.id
                     isDragging = true
                 }
-                NSCursor.crosshair.set()
+                Cursors.moveArrow.set()
                 let start = dragStart ?? globalFrame.origin
                 let gx = start.x + v.translation.width
                 let gy = start.y + v.translation.height

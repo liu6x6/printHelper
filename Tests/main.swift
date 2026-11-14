@@ -195,7 +195,7 @@ await MainActor.run {
        let src = CGImageSourceCreateWithData(png as CFData, nil),
        let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
        let buf = topDownPixels(cg) {
-        let sc = 300.0 / 72.0
+        let sc: CGFloat = 300.0 / 72.0
         let cx = Int((ps.margin + imgH / 2) * sc)
         let yTop = Int((ps.margin + 40) * sc)
         let yBot = Int((ps.margin + imgH - 40) * sc)
@@ -239,7 +239,7 @@ await MainActor.run {
     sm.setFraction(sm.doc.items[1].id, 0.6)
     do {
         let wrapper = try sm.saveProject()
-        let loaded = try EditorModel(layoutMode: .free)
+        let loaded = EditorModel(layoutMode: .free)
         try loaded.openProject(wrapper)
         check(loaded.doc.items.count == sm.doc.items.count, "工程往返：图片数量一致")
         check(loaded.doc.pageCount == sm.doc.pageCount, "工程往返：页数一致")
@@ -309,7 +309,7 @@ await MainActor.run {
     if let long = lm.exportLongImagePNG(),
        let src = CGImageSourceCreateWithData(long as CFData, nil),
        let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
-        let sc = 150.0 / 72.0
+        let sc: CGFloat = 150.0 / 72.0
         let expectW = Int(A4.width * sc)
         let expectH = Int(A4.height * sc) * pageCount
         check(cg.width == expectW && cg.height == expectH, "长图尺寸 = \(pageCount) 页拼接（实际 \(cg.width)x\(cg.height)）")
@@ -321,6 +321,88 @@ await MainActor.run {
         }
     } else {
         check(false, "长图导出失败")
+    }
+
+    // ---- 16. 导出服务：PDF / 每页 PNG·JPG / 长图 PNG·JPG（X-6）----
+    let ex = EditorModel(layoutMode: .flow)
+    ex.importImages(datas: [
+        makeBicolorImage(w: 300, h: 900),
+        makeImage(w: 300, h: 300, r: 0, g: 1, b: 0),
+    ])
+    let exDoc = ex.doc
+    let exPages = PDFRenderer.pageCount(of: exDoc)
+    check(exPages >= 2, "导出测试文档 ≥ 2 页（实际 \(exPages)）")
+    for kind in ExportKind.allCases {
+        let files = (try? ExportService.render(doc: exDoc, kind: kind)) ?? []
+        let expected = kind.isSingleFile ? 1 : exPages
+        check(files.count == expected && files.allSatisfy { !$0.data.isEmpty },
+              "\(kind.label)：\(files.count)/\(expected) 个非空文件")
+        check(files.allSatisfy { $0.name.hasSuffix("." + kind.fileExtension) }, "\(kind.label)：文件名后缀正确")
+    }
+    if let jpg = try? ExportService.render(doc: exDoc, kind: .pageJPG).first?.data,
+       let src = CGImageSourceCreateWithData(jpg as CFData, nil),
+       let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+        let dpiScale: CGFloat = 300 / 72
+        check(CGImageSourceGetType(src).map { $0 as String } == "public.jpeg", "JPG：编码类型正确")
+        check(cg.width == Int(A4.width * dpiScale) && cg.height == Int(A4.height * dpiScale),
+              "JPG：A4 300DPI 尺寸（实际 \(cg.width)x\(cg.height)）")
+    } else {
+        check(false, "JPG 渲染失败")
+    }
+    do {
+        _ = try ExportService.render(doc: PrintDocument(layoutMode: .flow), kind: .pdf)
+        check(false, "空文档导出应抛错（不再静默失败）")
+    } catch {
+        check(true, "空文档导出抛错：\(error.localizedDescription)")
+    }
+    if let files = try? ExportService.render(doc: exDoc, kind: .pdf),
+       let urls = try? ExportService.writeTempFiles(files) {
+        check(urls.count == 1 && FileManager.default.fileExists(atPath: urls[0].path),
+              "导出落盘：PDF 临时文件已写入 \(urls[0].lastPathComponent)")
+        ExportService.cleanTempExports()
+        check(!FileManager.default.fileExists(atPath: urls[0].path), "临时导出目录已清理")
+    } else {
+        check(false, "导出落盘失败")
+    }
+
+    // 说明：MainActor.run 的闭包不能抛错，这段整体包在 do-catch 里
+    do {
+      // ---- 17. 目录缓存（工作文件夹书签：保存 → 列举 → 重新打开）----
+      let suite = "ph-test-\(UUID().uuidString)"
+      let defaults = UserDefaults(suiteName: suite)!
+      let ws = WorkspaceStore(defaults: defaults)
+      check(!ws.hasWorkspace, "目录缓存：初始无工程文件夹")
+      let wsDir = FileManager.default.temporaryDirectory
+          .appendingPathComponent("ph-ws-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
+      ws.rememberWorkspace(wsDir)
+      check(ws.workspaceURL?.standardizedFileURL.path == wsDir.standardizedFileURL.path, "目录缓存：已记住工程文件夹")
+      ws.rememberExportDir(wsDir.appendingPathComponent("作业.pdf"))
+      check(ws.exportDirURL?.standardizedFileURL.path == wsDir.standardizedFileURL.path, "目录缓存：导出目录取文件所在目录")
+
+      // 重建 store = 模拟重启 App，书签 / 路径要能恢复
+      let ws2 = WorkspaceStore(defaults: defaults)
+      check(ws2.workspaceURL?.standardizedFileURL.path == wsDir.standardizedFileURL.path, "目录缓存：重启后恢复工程文件夹")
+      check(ws2.exportDirURL != nil, "目录缓存：重启后恢复导出目录")
+
+      let saved1 = try ws2.saveProject(try ProjectFile.archive(exDoc), name: "作业")
+      check(saved1.lastPathComponent == "作业.phdoc", "目录缓存：保存 作业.phdoc")
+      let saved2 = try ws2.saveProject(try ProjectFile.archive(exDoc), name: "作业")
+      check(saved2.lastPathComponent == "作业 2.phdoc", "目录缓存：同名不覆盖 → 作业 2.phdoc")
+      check(ws2.suggestedProjectName() == "作业 3", "目录缓存：建议名自动递增（\(ws2.suggestedProjectName())）")
+      let entries = ws2.projects()
+      check(entries.count == 2, "目录缓存：列出 2 个工程（实际 \(entries.count)）")
+      let reopened = try ws2.loadProject(at: saved1)
+      let doc2 = try ProjectFile.load(reopened)
+      check(doc2.items.count == exDoc.items.count && doc2.assets.count == exDoc.assets.count,
+            "目录缓存：重新打开工程内容一致")
+      check(ws2.lastProjectPath == saved1.path, "目录缓存：记住上次打开的工程")
+      ws2.clearWorkspace()
+      check(!ws2.hasWorkspace && ws2.projects().isEmpty, "目录缓存：可清除")
+      defaults.removePersistentDomain(forName: suite)
+      try? FileManager.default.removeItem(at: wsDir)
+    } catch {
+        check(false, "目录缓存测试抛错：\(error)")
     }
 }
 

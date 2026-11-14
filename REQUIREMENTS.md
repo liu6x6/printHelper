@@ -1,6 +1,14 @@
 # PrintHelper 需求文档
 
-> 版本：v1.3（✅ M1/M2/M3 全部完成）
+> 版本：v1.4（✅ M1/M2/M3 完成；v1.4：目录缓存 / 全页打印 / JPG 导出 / Info.plist 权限）
+>
+> **v1.4 变更**
+> - 新增 `Support/Info-iOS.plist`、`Support/Info-macOS.plist`：AirPrint Bonjour 服务、相册写入、
+>   `.phdoc` 文档类型声明（UTExportedTypeDeclarations + CFBundleDocumentTypes），沙盒 entitlement 增加 `com.apple.security.print`
+> - 打印改为「整份 PDF 逐页送打印」：macOS 用自定义 `PDFPrintView`（knowsPageRange/rectForPage），
+>   iOS 用 `UIPrintInteractionController.printingItem = PDF 文件`（修复只打第一页 / 无反应）
+> - 新增 `WorkspaceStore`：工程文件夹 / 导出目录 / 导入目录用安全作用域书签缓存，跨启动保留访问权
+> - 导出新增每页 JPG、长图 JPG；导出与打印改为后台渲染 + 进度提示 + 失败弹窗（不再静默无反应）
 > 平台：macOS + iOS（SwiftUI，单一 Multiplatform 工程）
 
 ---

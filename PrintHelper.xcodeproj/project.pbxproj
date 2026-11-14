@@ -6,8 +6,33 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXAggregateTarget section */
+		1BF24DDFDC5AE007F836F0CA /* Install App */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 8FB29D158D83C6354ACEE899 /* Build configuration list for PBXAggregateTarget "Install App" */;
+			buildPhases = (
+				21A34CE18C5D8660B7DF0AC5 /* Install built macOS app */,
+			);
+			dependencies = (
+				53B8ADE2A24133020BC7B8F0 /* PBXTargetDependency */,
+			);
+			name = "Install App";
+			productName = "Install App";
+		};
+/* End PBXAggregateTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		360991B9BA67417F9DEF6691 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 937262492FEC3A75C94DA374 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3DFDA7A97635869AE55EBD92;
+			remoteInfo = PrintHelper;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
-		270CA635B4FFD665B9CE4DF6 /* PrintHelper.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PrintHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		270CA635B4FFD665B9CE4DF6 /* PrintHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PrintHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -53,8 +78,6 @@
 				CE3DA07430A6B5CE00F9FC2B /* PrintHelper */,
 			);
 			name = PrintHelper;
-			packageProductDependencies = (
-			);
 			productName = PrintHelper;
 			productReference = 270CA635B4FFD665B9CE4DF6 /* PrintHelper.app */;
 			productType = "com.apple.product-type.application";
@@ -88,6 +111,7 @@
 			projectRoot = "";
 			targets = (
 				3DFDA7A97635869AE55EBD92 /* PrintHelper */,
+				1BF24DDFDC5AE007F836F0CA /* Install App */,
 			);
 		};
 /* End PBXProject section */
@@ -102,6 +126,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		21A34CE18C5D8660B7DF0AC5 /* Install built macOS app */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Install built macOS app";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "#!/bin/sh\nif [ -n \"${ZSH_VERSION:-}\" ]; then\n  emulate -L sh\nfi\nset -eu\n\nif [ \"$#\" -gt 2 ]; then\n  printf 'Usage: %s [app-path [destination-directory]]\\n' \"$0\" >&2\n  exit 64\nfi\n\napp_path=\"${1:-}\"\ndestination_directory=\"${2:-${INSTALL_APP_DESTINATION:-/Applications}}\"\n\nif [ -z \"$app_path\" ]; then\n  if [ -n \"${INSTALL_APP_BUNDLE_NAME:-}\" ]; then\n    if [ -z \"${BUILT_PRODUCTS_DIR:-}\" ]; then\n      printf '%s\\n' 'Xcode did not provide BUILT_PRODUCTS_DIR. Build the Install App scheme from Xcode.' >&2\n      exit 66\n    fi\n    app_path=\"$BUILT_PRODUCTS_DIR/$INSTALL_APP_BUNDLE_NAME\"\n  fi\n\nfi\n\nif [ -z \"$app_path\" ]; then\n  case \"${FULL_PRODUCT_NAME:-}\" in\n    *.app)\n      if [ -n \"${TARGET_BUILD_DIR:-}\" ] &&\n        [ -d \"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\" ]; then\n        app_path=\"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\"\n      fi\n      ;;\n  esac\n\n  if [ -z \"$app_path\" ]; then\n    products_directory=\"${BUILT_PRODUCTS_DIR:-${TARGET_BUILD_DIR:-}}\"\n    if [ -z \"$products_directory\" ] || [ ! -d \"$products_directory\" ]; then\n      printf '%s\\n' 'Cannot locate Xcode build products. Run this script from an Xcode Run Script phase, or pass an app path.' >&2\n      exit 66\n    fi\n\n    app_count=0\n    for candidate in \"$products_directory\"/*.app; do\n      [ -d \"$candidate\" ] || continue\n      app_count=$((app_count + 1))\n      app_path=\"$candidate\"\n    done\n\n    if [ \"$app_count\" -ne 1 ]; then\n      printf 'Expected one app in %s, found %s. Build the App target first; if multiple apps exist, pass the desired app path.\\n' \"$products_directory\" \"$app_count\" >&2\n      for candidate in \"$products_directory\"/*.app; do\n        [ -d \"$candidate\" ] || continue\n        printf '  %s\\n' \"$candidate\" >&2\n      done\n      exit 66\n    fi\n  fi\nfi\n\napp_path=\"${app_path%/}\"\n\nif [ ! -d \"$app_path\" ] || [ \"${app_path##*.}\" != \"app\" ]; then\n  printf 'App bundle not found: %s\\n' \"$app_path\" >&2\n  exit 66\nfi\n\nif [ ! -d \"$destination_directory\" ]; then\n  printf 'Destination directory not found: %s\\n' \"$destination_directory\" >&2\n  exit 73\nfi\n\napp_path=\"$(cd \"$(dirname \"$app_path\")\" && pwd -P)/$(basename \"$app_path\")\"\ndestination_directory=\"$(cd \"$destination_directory\" && pwd -P)\"\ndestination_path=\"$destination_directory/${app_path##*/}\"\n\nif [ -w \"$destination_directory\" ]; then\n  /usr/bin/ditto \"$app_path\" \"$destination_path\"\nelse\n  /usr/bin/osascript \\\n    -e 'on run argv' \\\n    -e 'do shell script (\"/usr/bin/ditto \" & quoted form of (item 1 of argv) & \" \" & quoted form of (item 2 of argv)) with administrator privileges' \\\n    -e 'end run' \\\n    \"$app_path\" \"$destination_path\"\nfi\n\nprintf 'Installed %s to %s\\n' \"${app_path##*/}\" \"$destination_path\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		8C1E92962FEB30BDE32111DC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -112,16 +158,48 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		53B8ADE2A24133020BC7B8F0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = PrintHelper;
+			target = 3DFDA7A97635869AE55EBD92 /* PrintHelper */;
+			targetProxy = 360991B9BA67417F9DEF6691 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		568804C76159A9BFE47BCF8C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INSTALL_APP_BUNDLE_NAME = PrintHelper.app;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 		72D60D7D534D6209F58364BF /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PrintHelper/PrintHelper.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ZH6TQH466Q;
 				ENABLE_HARDENED_RUNTIME = NO;
+				"INFOPLIST_FILE[sdk=iphoneos*]" = "Support/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Support/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Support/Info-macOS.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -144,11 +222,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PrintHelper/PrintHelper.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ZH6TQH466Q;
 				ENABLE_HARDENED_RUNTIME = NO;
+				"INFOPLIST_FILE[sdk=iphoneos*]" = "Support/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Support/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Support/Info-macOS.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -300,9 +383,36 @@
 			};
 			name = Release;
 		};
+		D16ECE2BFD41AE9B20BE67DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INSTALL_APP_BUNDLE_NAME = PrintHelper.app;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		8FB29D158D83C6354ACEE899 /* Build configuration list for PBXAggregateTarget "Install App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D16ECE2BFD41AE9B20BE67DA /* Release */,
+				568804C76159A9BFE47BCF8C /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		A9AD82371274FFEB6E58E7FD /* Build configuration list for PBXProject "PrintHelper" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

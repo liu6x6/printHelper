@@ -110,11 +110,21 @@ enum ImageCutter {
 
     /// 无损 PNG 编码
     static func pngData(_ img: CGImage) -> Data? {
+        encode(img, type: UTType.png.identifier, options: nil)
+    }
+
+    /// JPEG 编码（quality 0–1，默认 0.9）：体积比 PNG 小很多，适合发微信/打印店
+    static func jpegData(_ img: CGImage, quality: CGFloat = 0.9) -> Data? {
+        encode(img, type: UTType.jpeg.identifier,
+               options: [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    }
+
+    private static func encode(_ img: CGImage, type: String, options: CFDictionary?) -> Data? {
         let out = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else {
+        guard let dest = CGImageDestinationCreateWithData(out, type as CFString, 1, nil) else {
             return nil
         }
-        CGImageDestinationAddImage(dest, img, nil)
+        CGImageDestinationAddImage(dest, img, options)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return out as Data
     }
